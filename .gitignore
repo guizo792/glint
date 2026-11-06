@@ -3,3 +3,5 @@ bin/
 *.log
 /target/
 node_modules/
+app/ui/dist/
+app/gen/

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/glint-core", "crates/glint-win", "spikes/bench", "spikes/shell", "spikes/apps"]
+members = ["app", "crates/glint-core", "crates/glint-win", "spikes/bench"]
 
 [profile.release]
 lto = "thin"

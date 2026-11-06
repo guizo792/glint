@@ -1,5 +1,5 @@
 {
   "identifier": "default",
-  "windows": ["launcher"],
+  "windows": ["launcher", "settings"],
   "permissions": ["core:default"]
 }

@@ -9,6 +9,8 @@ pub mod shell;
 pub mod system;
 pub mod windows_list;
 
+pub use windows::core::Error;
+
 /// Encode a string as a NUL-terminated UTF-16 buffer for Win32 calls.
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain([0]).collect()
