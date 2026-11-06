@@ -27,6 +27,9 @@ compile_error!("snapshot format is little-endian only");
 
 /// Names scanned per parallel task.
 const CHUNK: usize = 32_768;
+/// Above this many candidates, narrow them cheaply before fuzzy scoring.
+const MAX_SCORED: usize = 20_000;
+const NARROWED: usize = 5_000;
 
 const MAGIC: &[u8; 8] = b"GLNTIDX4";
 const HEADER: usize = 48;
@@ -524,27 +527,117 @@ impl Index {
     /// Fast path: substring candidates, fuzzy-scored. Best first, ties broken by id.
     pub fn search(&self, query: &str, limit: usize) -> Vec<Hit> {
         let folded_q = fold(query.trim());
-        let terms: Vec<&str> = folded_q.split_whitespace().collect();
-        let Some(anchor) = terms.iter().max_by_key(|t| t.chars().count()) else {
+        let mut terms: Vec<&str> = folded_q.split_whitespace().collect();
+        terms.sort_by_key(|t| std::cmp::Reverse(t.chars().count()));
+        let Some(&longest) = terms.first() else {
             return Vec::new();
         };
-        let short = anchor.chars().count() < 3;
-        let mut cands = self.candidates(anchor, short);
-        if short && terms.len() == 1 {
-            return self.score_cheap(&cands, anchor, limit);
+        if terms.len() == 1 {
+            let short = longest.chars().count() < 3;
+            let cands = self.candidates(longest, short);
+            if short {
+                return self.score_cheap(&cands, longest, limit);
+            }
+            let cands = self.narrow(cands, longest);
+            return self.score(&cands, query.trim(), limit);
         }
-        if terms.len() > 1 {
-            cands = cands
+        // Any word may be the one in the name while the others match folders, so try each,
+        // longest first, until there are enough.
+        let in_dirs: Vec<Vec<bool>> = terms.iter().map(|t| self.dirs_containing(t)).collect();
+        let entry_dirs = self.entry_dirs.get();
+        let mut cands: Vec<u32> = Vec::new();
+        for (i, anchor) in terms.iter().enumerate() {
+            let found = self.candidates(anchor, anchor.chars().count() < 3);
+            let kept: Vec<u32> = found
                 .into_par_iter()
                 .filter(|&id| {
                     let name = self.folded_name(id);
-                    terms
-                        .iter()
-                        .all(|t| memmem::find(name, t.as_bytes()).is_some())
+                    let dir = (entry_dirs[id as usize] & DIR_MASK) as usize;
+                    terms.iter().enumerate().all(|(j, t)| {
+                        j == i || in_dirs[j][dir] || memmem::find(name, t.as_bytes()).is_some()
+                    })
                 })
                 .collect();
+            cands.extend(kept);
+            if cands.len() >= limit {
+                break;
+            }
         }
-        self.score(&cands, query.trim(), limit)
+        cands.sort_unstable();
+        cands.dedup();
+        let cands = self.narrow(cands, longest);
+        self.score_terms(&cands, query.trim(), &terms, limit)
+    }
+
+    /// Too many candidates to fuzzy-score in time: keep the likeliest by a cheap test (the word
+    /// starting the name, then starting a word, then shorter names, within the usual tiers).
+    fn narrow(&self, ids: Vec<u32>, needle: &str) -> Vec<u32> {
+        // Scoring non-ASCII names is much slower, so allow fewer of them.
+        let (max, keep) = if needle.is_ascii() {
+            (MAX_SCORED, NARROWED)
+        } else {
+            (NARROWED / 2, NARROWED / 5)
+        };
+        if ids.len() <= max {
+            return ids;
+        }
+        let q = needle.as_bytes();
+        let mut best: Vec<Hit> = ids
+            .par_chunks(CHUNK)
+            .map(|chunk| {
+                let mut out: Vec<Hit> = chunk
+                    .iter()
+                    .map(|&id| {
+                        let name = self.folded_name(id);
+                        let place = match memmem::find(name, q) {
+                            Some(0) => 2000,
+                            Some(i)
+                                if !name[i - 1].is_ascii_alphanumeric() && name[i - 1] < 0x80 =>
+                            {
+                                1000
+                            }
+                            _ => 0,
+                        };
+                        let score = place + 255 - name.len().min(255) as u32;
+                        Hit {
+                            id,
+                            score: self.tiered(id, score, q),
+                        }
+                    })
+                    .collect();
+                keep_top(&mut out, keep);
+                out
+            })
+            .flatten()
+            .collect();
+        keep_top(&mut best, keep);
+        best.into_iter().map(|h| h.id).collect()
+    }
+
+    /// For each folder, whether it or a folder above it has `term` in its name.
+    fn dirs_containing(&self, term: &str) -> Vec<bool> {
+        let parents = self.dir_parents.get();
+        let finder = memmem::Finder::new(term.as_bytes());
+        let mut found: Vec<bool> = (0..parents.len() as u32)
+            .into_par_iter()
+            .map_init(Vec::new, |buf: &mut Vec<u8>, d| {
+                let name = self.dir_name(d);
+                if name.is_ascii() {
+                    buf.clear();
+                    buf.extend(name.bytes().map(|b| b.to_ascii_lowercase()));
+                    finder.find(buf).is_some()
+                } else {
+                    finder.find(fold(name).as_bytes()).is_some()
+                }
+            })
+            .collect();
+        // Parents always have lower ids, so one forward pass reaches every descendant.
+        for d in 0..parents.len() {
+            if parents[d] != NO_PARENT && found[parents[d] as usize] {
+                found[d] = true;
+            }
+        }
+        found
     }
 
     /// Slow path: full subsequence scan of every name (the original brute-force behaviour).
@@ -590,9 +683,26 @@ impl Index {
     }
 
     fn score(&self, ids: &[u32], query: &str, limit: usize) -> Vec<Hit> {
+        self.score_terms(ids, query, &[], limit)
+    }
+
+    /// Score by the whole query. A name holding only some of `words`, because others matched
+    /// a folder, scores by its best word, so names holding them all rank first.
+    fn score_terms(&self, ids: &[u32], query: &str, words: &[&str], limit: usize) -> Vec<Hit> {
         if query.is_empty() || limit == 0 {
             return Vec::new();
         }
+        let word_pats: Vec<Pattern> = words
+            .iter()
+            .map(|w| {
+                Pattern::new(
+                    w,
+                    CaseMatching::Ignore,
+                    Normalization::Smart,
+                    AtomKind::Fuzzy,
+                )
+            })
+            .collect();
         let pat = Pattern::new(
             query,
             CaseMatching::Ignore,
@@ -619,6 +729,14 @@ impl Index {
                                 .or_else(|| {
                                     let name = std::str::from_utf8(self.folded_name(id)).ok()?;
                                     folded_pat.score(Utf32Str::new(name, buf), m)
+                                })
+                                .or_else(|| {
+                                    word_pats
+                                        .iter()
+                                        .filter_map(|p| {
+                                            p.score(Utf32Str::new(self.name(id), buf), m)
+                                        })
+                                        .max()
                                 })
                                 .map(|score| Hit {
                                     id,
@@ -724,6 +842,54 @@ mod tests {
             names(&ix, &ix.search("a", 10)),
             ["alpha", "alphabet", "my_app", "big apple"]
         );
+    }
+
+    #[test]
+    fn extra_words_can_match_folders_on_the_path() {
+        let mut ix = Index::default();
+        let root = ix.add_dir(None, "root");
+        let projects = ix.add_dir(Some(root), "Projects");
+        let glint = ix.add_dir(Some(projects), "glint");
+        ix.push("report.txt", glint, Kind::File);
+        ix.push("report.txt", root, Kind::File);
+        let hits = ix.search("projects report", 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            ix.path(hits[0].id),
+            ["root", "Projects", "glint", "report.txt"]
+                .iter()
+                .collect::<PathBuf>()
+        );
+        assert!(ix.search("nowhere report", 10).is_empty());
+    }
+
+    #[test]
+    fn huge_candidate_sets_still_surface_exact_and_prefix_matches() {
+        let mut ix = Index::default();
+        let root = ix.add_dir(None, "root");
+        for i in 0..MAX_SCORED + 500 {
+            ix.push(
+                &format!("zz_some_long_inner_alpha_name_{i}.txt"),
+                root,
+                Kind::File,
+            );
+        }
+        ix.push("alpha", root, Kind::File);
+        ix.push("alpha_prefix.txt", root, Kind::File);
+        let found = names(&ix, &ix.search("alpha", 2));
+        assert_eq!(found, ["alpha", "alpha_prefix.txt"]);
+    }
+
+    #[test]
+    fn names_containing_every_word_rank_above_folder_matches() {
+        let mut ix = Index::default();
+        let root = ix.add_dir(None, "root");
+        let budget = ix.add_dir(Some(root), "budget");
+        ix.push("report.txt", budget, Kind::File);
+        ix.push("budget-report.txt", root, Kind::File);
+        let hits = ix.search("budget report", 10);
+        assert_eq!(names(&ix, &hits)[0], "budget-report.txt");
+        assert_eq!(hits.len(), 2);
     }
 
     #[test]

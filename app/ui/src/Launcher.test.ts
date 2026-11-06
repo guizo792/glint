@@ -55,6 +55,9 @@ async function type(input: HTMLInputElement, text: string) {
   await waitFor(() => expect(api.search).toHaveBeenCalled());
 }
 
+const results = (n: number) =>
+  waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(n));
+
 const selectedTitle = () =>
   document.querySelector('li[aria-selected="true"] .title')?.textContent;
 
@@ -82,8 +85,7 @@ describe("Launcher", () => {
   it("shows results for typed text and selects the first", async () => {
     const input = await setup();
     await type(input, "a");
-    await screen.findByText("beta.txt", { exact: false });
-    expect(screen.getAllByRole("option")).toHaveLength(3);
+    await results(3);
     expect(selectedTitle()).toBe("alpha.txt");
   });
 
@@ -111,7 +113,7 @@ describe("Launcher", () => {
   it("moves the selection with arrows and Ctrl shortcuts, wrapping at the ends", async () => {
     const input = await setup();
     await type(input, "a");
-    await screen.findByText("gamma.txt");
+    await results(3);
     await fireEvent.keyDown(input, { key: "ArrowDown" });
     expect(selectedTitle()).toBe("beta.txt");
     await fireEvent.keyDown(input, { key: "j", ctrlKey: true });
@@ -125,7 +127,7 @@ describe("Launcher", () => {
   it("opens the selected result on Enter, passing the query for learning", async () => {
     const input = await setup();
     await type(input, "bet");
-    await screen.findByText("gamma.txt");
+    await results(3);
     await fireEvent.keyDown(input, { key: "ArrowDown" });
     await fireEvent.keyDown(input, { key: "Enter" });
     expect(api.runItem).toHaveBeenCalledWith("file:beta.txt", "open", "bet");
@@ -134,12 +136,12 @@ describe("Launcher", () => {
   it("uses Ctrl+Enter for the folder and Alt+number for a specific result", async () => {
     const input = await setup();
     await type(input, "a");
-    await screen.findByText("gamma.txt");
+    await results(3);
     await fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
     expect(api.runItem).toHaveBeenCalledWith("file:alpha.txt", "reveal", "a");
     await waitFor(() => expect(input.value).toBe(""));
     await type(input, "a");
-    await screen.findByText("gamma.txt");
+    await results(3);
     await fireEvent.keyDown(input, { key: "3", altKey: true });
     expect(api.runItem).toHaveBeenLastCalledWith("file:gamma.txt", "open", "a");
   });
@@ -147,7 +149,7 @@ describe("Launcher", () => {
   it("opens the action menu with Tab and runs the chosen action", async () => {
     const input = await setup();
     await type(input, "a");
-    await screen.findByText("gamma.txt");
+    await results(3);
     await fireEvent.keyDown(input, { key: "Tab" });
     await screen.findByText("Copy path");
     await fireEvent.keyDown(input, { key: "ArrowDown" });
@@ -159,11 +161,11 @@ describe("Launcher", () => {
   it("closes the menu on Esc without closing the launcher", async () => {
     const input = await setup();
     await type(input, "a");
-    await screen.findByText("gamma.txt");
+    await results(3);
     await fireEvent.keyDown(input, { key: "Tab" });
     await screen.findByText("Copy path");
     await fireEvent.keyDown(input, { key: "Escape" });
-    await screen.findByText("gamma.txt");
+    await results(3);
     expect(api.hideLauncher).not.toHaveBeenCalled();
     await fireEvent.keyDown(input, { key: "Escape" });
     expect(api.hideLauncher).toHaveBeenCalled();
@@ -173,7 +175,7 @@ describe("Launcher", () => {
     const shutdown = item("Shut down", { key: "cmd:Shutdown", kind: "command", confirm: true });
     const input = await setup([shutdown]);
     await type(input, "shut");
-    await screen.findByText("Shut", { exact: false });
+    await results(1);
     await fireEvent.keyDown(input, { key: "Enter" });
     await screen.findByText(/Press Enter again/);
     expect(api.runItem).not.toHaveBeenCalled();
@@ -189,7 +191,7 @@ describe("Launcher", () => {
     api.runItem.mockRejectedValue("The file could not be opened");
     const input = await setup();
     await type(input, "a");
-    await screen.findByText("gamma.txt");
+    await results(3);
     await fireEvent.keyDown(input, { key: "Enter" });
     expect((await screen.findByRole("alert")).textContent).toContain("could not be opened");
     expect(input.value).toBe("a");
@@ -198,7 +200,7 @@ describe("Launcher", () => {
   it("clears the query each time it is shown", async () => {
     const input = await setup();
     await type(input, "a");
-    await screen.findByText("gamma.txt");
+    await results(3);
     await handlers.shown({ payload: 0 });
     expect(input.value).toBe("");
   });
@@ -212,7 +214,7 @@ describe("Launcher", () => {
     const input = await setup();
     await waitFor(() => expect(api.applyAppearance).toHaveBeenCalled());
     await type(input, "a");
-    await screen.findByText("gamma.txt");
+    await results(3);
     await fireEvent.keyDown(input, { key: "Escape" });
     await handlers.shown({ payload: 0 });
     expect(input.value).toBe("a");
@@ -221,7 +223,7 @@ describe("Launcher", () => {
   it("tells screen readers how many results there are", async () => {
     const input = await setup();
     await type(input, "a");
-    await screen.findByText("gamma.txt");
+    await results(3);
     expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe("3 results");
     expect(input.getAttribute("aria-activedescendant")).toBe("result-0");
   });
@@ -230,7 +232,7 @@ describe("Launcher", () => {
     api.runItem.mockResolvedValue({ stay_open: true });
     const input = await setup();
     await type(input, "a");
-    await screen.findByText("gamma.txt");
+    await results(3);
     const before = api.search.mock.calls.length;
     await fireEvent.keyDown(input, { key: "k", ctrlKey: true });
     await screen.findByText("Pin");

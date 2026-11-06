@@ -39,7 +39,6 @@ const SETTINGS_PAGES: &[(&str, &str)] = &[
     ("Services", "services.msc"),
     ("Event Viewer", "eventvwr.msc"),
     ("Registry Editor", "regedit"),
-    ("Environment variables", "rundll32.exe"),
 ];
 
 fn system_id(c: SystemCommand) -> String {
@@ -68,9 +67,6 @@ pub fn items() -> Vec<Item> {
     items.extend(
         SETTINGS_PAGES
             .iter()
-            // Opening rundll32 alone does nothing useful; it needs arguments, which come from
-            // a shell link that Windows does not expose, so it is left out.
-            .filter(|(_, target)| *target != "rundll32.exe")
             .map(|(title, target)| {
                 Item::new(
                     format!("setting:{target}"),

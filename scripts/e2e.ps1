@@ -6,6 +6,10 @@ param(
     [string]$Shots = "$env:TEMP\glint-e2e-shots"
 )
 $ErrorActionPreference = "Stop"
+if (Get-Process LogonUI -ErrorAction SilentlyContinue) {
+    "SKIPPED: the desktop is locked, so nothing can receive a hotkey. Unlock and run again."
+    exit 2
+}
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type @'
 using System; using System.Runtime.InteropServices;
@@ -41,6 +45,7 @@ function Check($name, $ok) {
 }
 
 $env:GLINT_DATA_DIR = $data
+$env:GLINT_TRACE = "1"
 $proc = Start-Process $Exe -PassThru
 try {
     Start-Sleep -Seconds 6
@@ -82,12 +87,31 @@ try {
     Start-Sleep -Milliseconds 200
 
     Check "history saved" (Test-Path "$data\history.json")
+
+    # Show latency over repeated opens, and search latency while typing.
+    for ($i = 0; $i -lt 30; $i++) {
+        [Keys2]::AltSpace()
+        Start-Sleep -Milliseconds 350
+        if ($i % 3 -eq 0) { Type-Text "report"; Start-Sleep -Milliseconds 150 }
+        [Keys2]::AltSpace()
+        Start-Sleep -Milliseconds 300
+    }
+    foreach ($metric in "show", "search") {
+        $values = Select-String -Path "$data\logs\glint.log" -Pattern "trace $metric ([\d.]+)" |
+            ForEach-Object { [double]$_.Matches[0].Groups[1].Value } | Sort-Object
+        if ($values) {
+            $p95 = $values[[int](($values.Count - 1) * 0.95)]
+            $p50 = $values[[int](($values.Count - 1) * 0.5)]
+            "$metric n=$($values.Count) p50=$p50 ms p95=$p95 ms"
+        }
+    }
     Check "app still running at the end" (-not $proc.HasExited)
 } finally {
     if (-not $proc.HasExited) { Stop-Process $proc -Force }
     Start-Sleep -Milliseconds 500
     Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Out-Null
     Remove-Item Env:GLINT_DATA_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:GLINT_TRACE -ErrorAction SilentlyContinue
     Remove-Item $base -Recurse -Force -ErrorAction SilentlyContinue
 }
 if ($failed.Count) { "FAILED: $($failed -join ', ')"; exit 1 }

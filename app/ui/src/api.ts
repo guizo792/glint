@@ -40,6 +40,7 @@ export interface Settings {
   entries: number;
   version: string;
   user_css: string;
+  trace: boolean;
 }
 
 export const search = (query: string, generation: number, fuzzy: boolean) =>
@@ -56,6 +57,7 @@ export const openConfigFile = () => invoke<void>("open_config_file");
 export const rebuildIndex = () => invoke<void>("rebuild_index");
 export const clearHistory = () => invoke<void>("clear_history");
 export const clearClipboardHistory = () => invoke<void>("clear_clipboard_history");
+export const trace = (name: string, ms: number) => invoke<void>("trace", { name, ms });
 export const diagnostics = () => invoke<string>("diagnostics");
 
 /** Apply theme and any user stylesheet to the document. */

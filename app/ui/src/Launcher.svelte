@@ -23,6 +23,7 @@
   let generation = 0;
   let fuzzyTimer: ReturnType<typeof setTimeout> | undefined;
   let rememberSecs = 0;
+  let tracing = false;
   let hiddenAt = 0;
 
   const selectedItem = $derived(items[selected]);
@@ -39,6 +40,7 @@
 
   async function runSearch(text: string, fuzzy: boolean) {
     const mine = ++generation;
+    const started = performance.now();
     const result = await api.search(text, mine, fuzzy);
     if (result.generation !== generation) return;
     const keep = fuzzy ? selectedItem?.key : undefined;
@@ -46,6 +48,9 @@
     const kept = keep ? items.findIndex((i) => i.key === keep) : -1;
     selected = kept >= 0 ? kept : 0;
     await tick();
+    if (tracing && !fuzzy) {
+      requestAnimationFrame(() => api.trace("search", performance.now() - started));
+    }
     resize();
     loadIcons();
     if (!fuzzy && text.trim().length >= 3 && items.length < 8) {
@@ -90,13 +95,9 @@
       }
     } catch (e) {
       error = String(e);
-      await api_show_error();
+      await tick();
+      resize();
     }
-  }
-
-  async function api_show_error() {
-    await tick();
-    resize();
   }
 
   function move(delta: number) {
@@ -212,6 +213,7 @@
     const settings = await api.getSettings();
     setLanguage(settings.config.language);
     rememberSecs = settings.config.remember_query_secs;
+    tracing = settings.trace;
     api.applyAppearance(settings);
   }
 
@@ -219,7 +221,12 @@
     loadSettings();
     resize();
     const unlisten = [
-      listen("shown", async () => {
+      listen<number>("shown", async (event) => {
+        if (tracing) {
+          requestAnimationFrame(() =>
+            api.trace("show", performance.timeOrigin + performance.now() - event.payload / 1000),
+          );
+        }
         menu = null;
         confirming = null;
         error = null;

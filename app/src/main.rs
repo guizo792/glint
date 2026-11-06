@@ -264,7 +264,10 @@ fn show_launcher(app: &AppHandle) {
     place_on_cursor_monitor(app, &window);
     let _ = window.show();
     let _ = window.set_focus();
-    let _ = window.emit("shown", ());
+    let micros = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_micros() as u64);
+    let _ = window.emit("shown", micros);
 }
 
 fn toggle_launcher(app: &AppHandle) {
@@ -512,6 +515,12 @@ fn set_height(app: AppHandle, height: f64) {
     }
 }
 
+/// Record a timing from the UI. The UI only sends these when GLINT_TRACE is set.
+#[tauri::command]
+fn trace(state: tauri::State<'_, State>, name: String, ms: f64) {
+    log(&state.paths, &format!("trace {name} {ms:.1}"));
+}
+
 #[derive(Serialize)]
 struct Settings {
     config: Config,
@@ -522,6 +531,7 @@ struct Settings {
     entries: usize,
     version: &'static str,
     user_css: String,
+    trace: bool,
 }
 
 #[tauri::command]
@@ -536,6 +546,7 @@ fn get_settings(state: tauri::State<'_, State>) -> Settings {
         version: env!("CARGO_PKG_VERSION"),
         user_css: std::fs::read_to_string(state.paths.config_dir.join("theme.css"))
             .unwrap_or_default(),
+        trace: std::env::var_os("GLINT_TRACE").is_some(),
     }
 }
 
@@ -803,6 +814,7 @@ fn main() {
             clear_history,
             clear_clipboard_history,
             diagnostics,
+            trace,
         ])
         .on_window_event(|window, event| {
             if window.label() == "launcher" {
