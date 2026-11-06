@@ -2,7 +2,9 @@
 //!   bench [N] [--real [ROOT]] [--gate MS]
 //! Run with RAYON_NUM_THREADS=4 to model a mid-range machine. With --gate, exits 1 if any
 //! fast-path query exceeds MS at p95.
-use glint_core::Index;
+use glint_core::{DirId, Index, Kind};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Instant;
 
 struct Rng(u64);
@@ -67,17 +69,37 @@ fn main() {
             .cloned()
             .unwrap_or("C:\\".into());
         let t = Instant::now();
+        let mut dirs: HashMap<PathBuf, DirId> = HashMap::new();
+        let mut skipped = 0usize;
         for e in jwalk::WalkDir::new(&root)
             .skip_hidden(false)
             .follow_links(false)
             .into_iter()
             .flatten()
         {
-            if let Some(name) = e.file_name().to_str() {
-                ix.push(name);
+            if e.depth() == 0 {
+                dirs.insert(e.path(), ix.add_dir(None, &root));
+                continue;
+            }
+            // A missing parent means an ancestor's name was not valid UTF-8 and was skipped.
+            let (Some(name), Some(&parent)) = (e.file_name().to_str(), dirs.get(e.parent_path()))
+            else {
+                skipped += 1;
+                continue;
+            };
+            if e.file_type().is_dir() {
+                ix.push(name, parent, Kind::Dir);
+                dirs.insert(e.path(), ix.add_dir(Some(parent), name));
+            } else {
+                ix.push(name, parent, Kind::File);
             }
         }
-        println!("walked {root}: {} entries in {:?}", ix.len(), t.elapsed());
+        println!(
+            "walked {root}: {} entries, {} folders, {skipped} skipped, in {:?}",
+            ix.len(),
+            ix.dir_count(),
+            t.elapsed()
+        );
     } else {
         let words = [
             "report",
@@ -109,6 +131,7 @@ fn main() {
             "pdf", "docx", "png", "jpg", "txt", "rs", "ts", "json", "md", "xlsx", "exe", "lnk",
         ];
         let mut rng = Rng(0x9E3779B97F4A7C15);
+        let root = ix.add_dir(None, "C:\\");
         for i in 0..n {
             let mut w = || {
                 if rng.next() % 100 < 1 {
@@ -118,8 +141,11 @@ fn main() {
                 }
             };
             let name = format!("{}_{}-{}_{}.{}", w(), w(), w(), i, rng.pick(&exts));
-            ix.push(&name);
+            ix.push(&name, root, Kind::File);
         }
+    }
+    if flag("--verify").is_some() {
+        verify_paths(&ix);
     }
     println!(
         "{} names, {:.1} MB heap + {:.1} MB mapped, {} rayon threads",
@@ -184,6 +210,31 @@ fn main() {
         }
         println!("gate ok (<= {limit} ms)");
     }
+}
+
+/// Check a sample of rebuilt paths against the real disk.
+fn verify_paths(ix: &Index) {
+    let step = (ix.len() / 5000).max(1);
+    let (mut checked, mut missing, mut wrong_kind) = (0, 0, 0);
+    for id in (0..ix.len() as u32).step_by(step) {
+        checked += 1;
+        let path = ix.path(id);
+        match path.symlink_metadata() {
+            Ok(m) => {
+                if m.is_dir() != (ix.kind(id) == Kind::Dir) {
+                    wrong_kind += 1;
+                    println!("  wrong kind: {}", path.display());
+                }
+            }
+            Err(_) => {
+                missing += 1;
+                if missing <= 5 {
+                    println!("  not found: {}", path.display());
+                }
+            }
+        }
+    }
+    println!("verified {checked} paths: {missing} not found, {wrong_kind} wrong kind");
 }
 
 fn rayon_threads() -> usize {

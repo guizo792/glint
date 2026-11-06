@@ -9,7 +9,7 @@ use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use rayon::prelude::*;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[cfg(not(target_endian = "little"))]
@@ -18,8 +18,13 @@ compile_error!("snapshot format is little-endian only");
 /// Names scanned per parallel task.
 const CHUNK: usize = 32_768;
 
-const MAGIC: &[u8; 8] = b"GLNTIDX1";
-const HEADER: usize = 32;
+const MAGIC: &[u8; 8] = b"GLNTIDX2";
+const HEADER: usize = 48;
+
+/// `dir_parents` value for a root folder.
+const NO_PARENT: u32 = u32::MAX;
+/// Set in an `entry_dirs` value when the entry is itself a folder.
+const IS_DIR_BIT: u32 = 1 << 31;
 
 /// Byte storage: heap while building, or a read-only window into a memory-mapped snapshot.
 enum Bytes {
@@ -38,6 +43,12 @@ impl Bytes {
         match self {
             Bytes::Owned(v) => v,
             Bytes::Mapped(..) => panic!("index opened from a snapshot is read-only"),
+        }
+    }
+    fn heap_bytes(&self) -> usize {
+        match self {
+            Bytes::Owned(v) => v.len(),
+            Bytes::Mapped(..) => 0,
         }
     }
 }
@@ -61,6 +72,12 @@ impl Words {
             Words::Mapped(..) => panic!("index opened from a snapshot is read-only"),
         }
     }
+    fn heap_bytes(&self) -> usize {
+        match self {
+            Words::Owned(v) => 4 * v.len(),
+            Words::Mapped(..) => 0,
+        }
+    }
 }
 
 fn align8(n: usize) -> usize {
@@ -69,28 +86,52 @@ fn align8(n: usize) -> usize {
 
 /// Section offsets of a snapshot file; each section starts 8-byte aligned.
 struct Layout {
+    count: usize,
+    dir_count: usize,
     name_ends: usize,
     fold_ends: usize,
+    entry_dirs: usize,
+    dir_parents: usize,
+    dir_name_ends: usize,
     names: usize,
     folded: usize,
+    dir_names: usize,
     names_len: usize,
     folded_len: usize,
+    dir_names_len: usize,
     total: usize,
 }
 
-fn layout(count: usize, names_len: usize, folded_len: usize) -> Layout {
+fn layout(
+    count: usize,
+    dir_count: usize,
+    names_len: usize,
+    folded_len: usize,
+    dir_names_len: usize,
+) -> Layout {
     let name_ends = HEADER;
     let fold_ends = align8(name_ends + 4 * count);
-    let names = align8(fold_ends + 4 * count);
+    let entry_dirs = align8(fold_ends + 4 * count);
+    let dir_parents = align8(entry_dirs + 4 * count);
+    let dir_name_ends = align8(dir_parents + 4 * dir_count);
+    let names = align8(dir_name_ends + 4 * dir_count);
     let folded = align8(names + names_len);
+    let dir_names = align8(folded + folded_len);
     Layout {
+        count,
+        dir_count,
         name_ends,
         fold_ends,
+        entry_dirs,
+        dir_parents,
+        dir_name_ends,
         names,
         folded,
+        dir_names,
         names_len,
         folded_len,
-        total: align8(folded + folded_len),
+        dir_names_len,
+        total: align8(dir_names + dir_names_len),
     }
 }
 
@@ -98,28 +139,41 @@ fn corrupt(msg: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("bad snapshot: {msg}"))
 }
 
-/// Validate the header (and total size) of snapshot bytes; returns `(count, layout)`.
-fn parse_header(bytes: &[u8]) -> io::Result<(usize, Layout)> {
+/// Validate the header (and total size) of snapshot bytes.
+fn parse_header(bytes: &[u8]) -> io::Result<Layout> {
     if bytes.len() < HEADER || &bytes[..8] != MAGIC {
         return Err(corrupt("missing magic"));
     }
     let word = |i: usize| u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap()) as usize;
-    let (count, nl, fl) = (word(8), word(16), word(24));
+    let (count, dirs, nl, fl, dl) = (word(8), word(16), word(24), word(32), word(40));
     // Reject absurd sizes before they can overflow the layout arithmetic.
-    if count > u32::MAX as usize || nl > u32::MAX as usize || fl > u32::MAX as usize {
+    if [count, dirs, nl, fl, dl]
+        .iter()
+        .any(|&v| v > u32::MAX as usize)
+    {
         return Err(corrupt("size out of range"));
     }
-    let lay = layout(count, nl, fl);
+    let lay = layout(count, dirs, nl, fl, dl);
     if bytes.len() != lay.total {
         return Err(corrupt("length mismatch"));
     }
-    Ok((count, lay))
+    Ok(lay)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
     pub id: u32,
     pub score: u32,
+}
+
+/// A folder in the index's folder table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirId(u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    File,
+    Dir,
 }
 
 /// A name index. Build with [`Index::push`], persist with [`Index::save`], and reopen
@@ -133,6 +187,14 @@ pub struct Index {
     folded: Bytes,
     /// End offset (past the terminator) of each name in `folded`.
     fold_ends: Words,
+    /// Containing folder of each entry, with [`IS_DIR_BIT`] set for folder entries.
+    entry_dirs: Words,
+    /// Parent of each folder, always a lower id, or [`NO_PARENT`] for a root.
+    dir_parents: Words,
+    /// End offset of each folder's own name in `dir_names`.
+    dir_name_ends: Words,
+    /// Folder names (a root's name is its full path, e.g. `C:\`), concatenated.
+    dir_names: Bytes,
 }
 
 impl Default for Index {
@@ -142,13 +204,41 @@ impl Default for Index {
             name_ends: Words::Owned(Vec::new()),
             folded: Bytes::Owned(Vec::new()),
             fold_ends: Words::Owned(Vec::new()),
+            entry_dirs: Words::Owned(Vec::new()),
+            dir_parents: Words::Owned(Vec::new()),
+            dir_name_ends: Words::Owned(Vec::new()),
+            dir_names: Bytes::Owned(Vec::new()),
         }
     }
 }
 
 impl Index {
-    /// Append a name. Panics on an index opened from a snapshot (those are read-only).
-    pub fn push(&mut self, name: &str) {
+    /// Add a folder to the folder table. This does not make it a search result; push it
+    /// as a [`Kind::Dir`] entry for that. Panics on an unknown parent or a read-only index.
+    pub fn add_dir(&mut self, parent: Option<DirId>, name: &str) -> DirId {
+        let id = self.dir_parents.get().len() as u32;
+        assert!(id < IS_DIR_BIT, "too many folders");
+        let parent = parent.map_or(NO_PARENT, |p| {
+            assert!(p.0 < id, "unknown parent folder");
+            p.0
+        });
+        self.dir_parents.owned_mut().push(parent);
+        let dir_names = self.dir_names.owned_mut();
+        dir_names.extend_from_slice(name.as_bytes());
+        self.dir_name_ends.owned_mut().push(dir_names.len() as u32);
+        DirId(id)
+    }
+
+    /// Append a searchable entry. Panics on an unknown folder or a read-only index.
+    pub fn push(&mut self, name: &str, dir: DirId, kind: Kind) {
+        assert!(
+            (dir.0 as usize) < self.dir_parents.get().len(),
+            "unknown folder"
+        );
+        self.entry_dirs.owned_mut().push(match kind {
+            Kind::File => dir.0,
+            Kind::Dir => dir.0 | IS_DIR_BIT,
+        });
         let names = self.names.owned_mut();
         names.extend_from_slice(name.as_bytes());
         self.name_ends.owned_mut().push(names.len() as u32);
@@ -169,15 +259,19 @@ impl Index {
 
     /// Bytes held on the heap (zero for a memory-mapped index).
     pub fn heap_bytes(&self) -> usize {
-        let heap = |owned: bool, n: usize| if owned { n } else { 0 };
-        heap(
-            matches!(self.names, Bytes::Owned(_)),
-            self.names.get().len(),
-        ) + heap(
-            matches!(self.folded, Bytes::Owned(_)),
-            self.folded.get().len(),
-        ) + heap(matches!(self.name_ends, Words::Owned(_)), 4 * self.len())
-            + heap(matches!(self.fold_ends, Words::Owned(_)), 4 * self.len())
+        self.names.heap_bytes()
+            + self.folded.heap_bytes()
+            + self.dir_names.heap_bytes()
+            + self.name_ends.heap_bytes()
+            + self.fold_ends.heap_bytes()
+            + self.entry_dirs.heap_bytes()
+            + self.dir_parents.heap_bytes()
+            + self.dir_name_ends.heap_bytes()
+    }
+
+    /// Number of folders in the folder table.
+    pub fn dir_count(&self) -> usize {
+        self.dir_parents.get().len()
     }
 
     /// Bytes backed by a mapped snapshot file (zero for a heap index).
@@ -190,21 +284,43 @@ impl Index {
 
     /// Write a snapshot atomically (temp file + rename).
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let (names, folded) = (self.names.get(), self.folded.get());
+        let (names, folded, dir_names) =
+            (self.names.get(), self.folded.get(), self.dir_names.get());
         let (ne, fe) = (self.name_ends.get(), self.fold_ends.get());
-        let lay = layout(ne.len(), names.len(), folded.len());
+        let (ed, dp, dne) = (
+            self.entry_dirs.get(),
+            self.dir_parents.get(),
+            self.dir_name_ends.get(),
+        );
+        let lay = layout(
+            ne.len(),
+            dp.len(),
+            names.len(),
+            folded.len(),
+            dir_names.len(),
+        );
         let tmp = path.with_extension("tmp");
         let mut w = io::BufWriter::new(std::fs::File::create(&tmp)?);
         w.write_all(MAGIC)?;
-        for v in [ne.len(), names.len(), folded.len()] {
+        for v in [
+            ne.len(),
+            dp.len(),
+            names.len(),
+            folded.len(),
+            dir_names.len(),
+        ] {
             w.write_all(&(v as u64).to_le_bytes())?;
         }
         let mut pos = HEADER;
         for (start, bytes) in [
             (lay.name_ends, bytemuck::cast_slice::<u32, u8>(ne)),
             (lay.fold_ends, bytemuck::cast_slice::<u32, u8>(fe)),
+            (lay.entry_dirs, bytemuck::cast_slice::<u32, u8>(ed)),
+            (lay.dir_parents, bytemuck::cast_slice::<u32, u8>(dp)),
+            (lay.dir_name_ends, bytemuck::cast_slice::<u32, u8>(dne)),
             (lay.names, names),
             (lay.folded, folded),
+            (lay.dir_names, dir_names),
         ] {
             w.write_all(&vec![0; start - pos])?; // alignment padding
             w.write_all(bytes)?;
@@ -222,48 +338,100 @@ impl Index {
         let file = std::fs::File::open(path)?;
         // SAFETY: the snapshot is only ever replaced by rename, never modified in place.
         let map = Arc::new(unsafe { memmap2::Mmap::map(&file)? });
-        let (count, lay) = parse_header(&map)?;
+        let lay = parse_header(&map)?;
         let ix = Index {
-            name_ends: Words::Mapped(map.clone(), lay.name_ends, count),
-            fold_ends: Words::Mapped(map.clone(), lay.fold_ends, count),
+            name_ends: Words::Mapped(map.clone(), lay.name_ends, lay.count),
+            fold_ends: Words::Mapped(map.clone(), lay.fold_ends, lay.count),
+            entry_dirs: Words::Mapped(map.clone(), lay.entry_dirs, lay.count),
+            dir_parents: Words::Mapped(map.clone(), lay.dir_parents, lay.dir_count),
+            dir_name_ends: Words::Mapped(map.clone(), lay.dir_name_ends, lay.dir_count),
             names: Bytes::Mapped(map.clone(), lay.names, lay.names_len),
             folded: Bytes::Mapped(map.clone(), lay.folded, lay.folded_len),
+            dir_names: Bytes::Mapped(map.clone(), lay.dir_names, lay.dir_names_len),
         };
-        ix.validate(count, &lay, &map[..])?;
+        ix.validate(&lay)?;
         Ok(ix)
     }
 
     /// Load a snapshot into heap memory (fallback where mapping is unsuitable).
     pub fn read(path: &Path) -> io::Result<Index> {
         let bytes = std::fs::read(path)?;
-        let (count, lay) = parse_header(&bytes)?;
-        let words = |off: usize| -> Vec<u32> {
-            let (chunks, _) = bytes[off..off + 4 * count].as_chunks::<4>();
+        let lay = parse_header(&bytes)?;
+        let words = |off: usize, n: usize| -> Vec<u32> {
+            let (chunks, _) = bytes[off..off + 4 * n].as_chunks::<4>();
             chunks.iter().map(|c| u32::from_le_bytes(*c)).collect()
         };
-        let (ne, fe) = (words(lay.name_ends), words(lay.fold_ends));
         let ix = Index {
-            name_ends: Words::Owned(ne),
-            fold_ends: Words::Owned(fe),
+            name_ends: Words::Owned(words(lay.name_ends, lay.count)),
+            fold_ends: Words::Owned(words(lay.fold_ends, lay.count)),
+            entry_dirs: Words::Owned(words(lay.entry_dirs, lay.count)),
+            dir_parents: Words::Owned(words(lay.dir_parents, lay.dir_count)),
+            dir_name_ends: Words::Owned(words(lay.dir_name_ends, lay.dir_count)),
             names: Bytes::Owned(bytes[lay.names..lay.names + lay.names_len].to_vec()),
             folded: Bytes::Owned(bytes[lay.folded..lay.folded + lay.folded_len].to_vec()),
+            dir_names: Bytes::Owned(
+                bytes[lay.dir_names..lay.dir_names + lay.dir_names_len].to_vec(),
+            ),
         };
-        ix.validate(count, &lay, &bytes)?;
+        ix.validate(&lay)?;
         Ok(ix)
     }
 
-    /// Cheap integrity checks: the offset tables must end exactly at their data, with the
-    /// final offsets inside the file, so lookups cannot index out of range.
-    fn validate(&self, count: usize, lay: &Layout, file: &[u8]) -> io::Result<()> {
-        let (ne, fe) = (self.name_ends.get(), self.fold_ends.get());
-        if ne.len() != count || fe.len() != count {
-            return Err(corrupt("table size"));
-        }
+    /// Integrity checks: offset tables must end exactly at their data, and folder links must
+    /// be in range and point backwards, so [`Index::path`] cannot loop or index out of range.
+    fn validate(&self, lay: &Layout) -> io::Result<()> {
         let last = |t: &[u32]| t.last().copied().unwrap_or(0) as usize;
-        if last(ne) != lay.names_len || last(fe) != lay.folded_len || file.len() != lay.total {
+        if last(self.name_ends.get()) != lay.names_len
+            || last(self.fold_ends.get()) != lay.folded_len
+            || last(self.dir_name_ends.get()) != lay.dir_names_len
+        {
             return Err(corrupt("offsets do not match data"));
         }
+        let parents = self.dir_parents.get();
+        if parents
+            .iter()
+            .enumerate()
+            .any(|(i, &p)| p != NO_PARENT && p as usize >= i)
+        {
+            return Err(corrupt("bad folder parent"));
+        }
+        if self
+            .entry_dirs
+            .get()
+            .iter()
+            .any(|&d| (d & !IS_DIR_BIT) as usize >= parents.len())
+        {
+            return Err(corrupt("bad entry folder"));
+        }
         Ok(())
+    }
+
+    /// Whether an entry is a file or a folder.
+    pub fn kind(&self, id: u32) -> Kind {
+        if self.entry_dirs.get()[id as usize] & IS_DIR_BIT != 0 {
+            Kind::Dir
+        } else {
+            Kind::File
+        }
+    }
+
+    /// Full path of an entry, rebuilt from the folder table.
+    pub fn path(&self, id: u32) -> PathBuf {
+        let parents = self.dir_parents.get();
+        let mut parts = vec![self.name(id)];
+        let mut dir = self.entry_dirs.get()[id as usize] & !IS_DIR_BIT;
+        while dir != NO_PARENT {
+            parts.push(self.dir_name(dir));
+            dir = parents[dir as usize];
+        }
+        parts.iter().rev().collect()
+    }
+
+    fn dir_name(&self, dir: u32) -> &str {
+        let (ends, names) = (self.dir_name_ends.get(), self.dir_names.get());
+        let i = dir as usize;
+        let start = if i == 0 { 0 } else { ends[i - 1] as usize };
+        std::str::from_utf8(&names[start..ends[i] as usize]).unwrap_or("")
     }
 
     pub fn name(&self, id: u32) -> &str {
@@ -425,8 +593,9 @@ mod tests {
 
     fn index(names: &[&str]) -> Index {
         let mut ix = Index::default();
+        let root = ix.add_dir(None, "root");
         for n in names {
-            ix.push(n);
+            ix.push(n, root, Kind::File);
         }
         ix
     }
@@ -564,7 +733,86 @@ mod tests {
         index(&["a"]).save(&path).unwrap();
         let mut ix = Index::open(&path).unwrap();
         let _ = std::fs::remove_file(&path);
-        ix.push("b");
+        ix.push("b", DirId(0), Kind::File);
+    }
+
+    fn tree() -> Index {
+        let mut ix = Index::default();
+        let root = ix.add_dir(None, "root");
+        let docs = ix.add_dir(Some(root), "Documents");
+        let reports = ix.add_dir(Some(docs), "تقارير");
+        ix.push("Documents", root, Kind::Dir);
+        ix.push("تقارير", docs, Kind::Dir);
+        ix.push("résumé.pdf", reports, Kind::File);
+        ix.push("top.txt", root, Kind::File);
+        ix
+    }
+
+    fn assert_tree(ix: &Index) {
+        let expect = |parts: &[&str]| parts.iter().collect::<PathBuf>();
+        assert_eq!(ix.dir_count(), 3);
+        assert_eq!(ix.path(0), expect(&["root", "Documents"]));
+        assert_eq!(ix.path(1), expect(&["root", "Documents", "تقارير"]));
+        assert_eq!(
+            ix.path(2),
+            expect(&["root", "Documents", "تقارير", "résumé.pdf"])
+        );
+        assert_eq!(ix.path(3), expect(&["root", "top.txt"]));
+        assert_eq!(ix.kind(0), Kind::Dir);
+        assert_eq!(ix.kind(2), Kind::File);
+    }
+
+    #[test]
+    fn rebuilds_paths_and_kinds() {
+        assert_tree(&tree());
+    }
+
+    #[test]
+    fn paths_and_kinds_survive_snapshots() {
+        let path = temp_path("tree");
+        tree().save(&path).unwrap();
+        assert_tree(&Index::open(&path).unwrap());
+        assert_tree(&Index::read(&path).unwrap());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn drive_root_joins_into_a_windows_path() {
+        let mut ix = Index::default();
+        let root = ix.add_dir(None, "C:\\");
+        let users = ix.add_dir(Some(root), "Users");
+        ix.push("a.txt", users, Kind::File);
+        assert_eq!(ix.path(0), PathBuf::from("C:\\Users\\a.txt"));
+    }
+
+    #[test]
+    fn folders_are_searchable_only_when_pushed_as_entries() {
+        let ix = tree();
+        let got = ix.search("documents", 10);
+        assert_eq!(got.len(), 1);
+        assert_eq!(ix.kind(got[0].id), Kind::Dir);
+        assert!(ix.search("root", 10).is_empty());
+    }
+
+    #[test]
+    fn corrupt_folder_links_are_rejected() {
+        let path = temp_path("links");
+        let ix = tree();
+        ix.save(&path).unwrap();
+        let good = std::fs::read(&path).unwrap();
+        let lay = parse_header(&good).unwrap();
+        for (label, offset) in [
+            ("parent pointing forward", lay.dir_parents),
+            ("entry folder out of range", lay.entry_dirs),
+        ] {
+            let mut bad = good.clone();
+            bad[offset..offset + 4].copy_from_slice(&7u32.to_le_bytes());
+            std::fs::write(&path, bad).unwrap();
+            assert!(Index::open(&path).is_err(), "{label} accepted by open");
+            assert!(Index::read(&path).is_err(), "{label} accepted by read");
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
