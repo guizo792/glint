@@ -46,8 +46,21 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok());
 
+    let path_arg = |name: &str| {
+        flag(name)
+            .and_then(|i| args.get(i + 1))
+            .map(std::path::PathBuf::from)
+    };
     let mut ix = Index::default();
-    if let Some(i) = flag("--real") {
+    if let Some(p) = path_arg("--load") {
+        let t = Instant::now();
+        ix = Index::open(&p).expect("open snapshot");
+        println!("mapped {} in {:?}", p.display(), t.elapsed());
+    } else if let Some(p) = path_arg("--load-heap") {
+        let t = Instant::now();
+        ix = Index::read(&p).expect("read snapshot");
+        println!("read into heap {} in {:?}", p.display(), t.elapsed());
+    } else if let Some(i) = flag("--real") {
         let root = args
             .get(i + 1)
             .filter(|a| !a.starts_with("--"))
@@ -109,14 +122,26 @@ fn main() {
         }
     }
     println!(
-        "{} names, {:.1} MB index, {} rayon threads",
+        "{} names, {:.1} MB heap + {:.1} MB mapped, {} rayon threads",
         ix.len(),
         ix.heap_bytes() as f64 / 1e6,
+        ix.mapped_bytes() as f64 / 1e6,
         rayon_threads()
     );
+    if let Some(p) = path_arg("--save") {
+        let t = Instant::now();
+        ix.save(&p).expect("save snapshot");
+        println!(
+            "saved {} ({:.1} MB) in {:?}",
+            p.display(),
+            std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) as f64 / 1e6,
+            t.elapsed()
+        );
+    }
 
     println!("\nquery           fast p50 / p95 ms   hits    brute-force p50 / p95 ms");
     let mut worst: f64 = 0.0;
+    let skip = flag("--no-queries").is_some();
     for q in [
         "r",
         "re",
@@ -128,13 +153,30 @@ fn main() {
         "résu",
         "تقر",
         "zzzzqq",
-    ] {
+    ]
+    .into_iter()
+    .filter(|_| !skip)
+    {
         let (p50, p95, hits) = time(|| ix.search(q, 20).len(), 40);
-        let (b50, b95, _) = time(|| ix.search_fuzzy(q, 20).len(), 10);
+        let (b50, b95, _) = if flag("--no-brute").is_some() {
+            (0.0, 0.0, 0)
+        } else {
+            time(|| ix.search_fuzzy(q, 20).len(), 10)
+        };
         worst = worst.max(p95);
         println!("{q:<14} {p50:8.1} / {p95:6.1}   {hits:>4}    {b50:8.1} / {b95:6.1}");
     }
     println!("\nworst fast-path p95: {worst:.1} ms");
+    if let Some(secs) = flag("--hold")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        println!(
+            "holding pid {} for {secs}s for external memory measurement",
+            std::process::id()
+        );
+        std::thread::sleep(std::time::Duration::from_secs(secs));
+    }
     if let Some(limit) = gate {
         if worst > limit {
             eprintln!("GATE FAILED: {worst:.1} ms > {limit} ms");
