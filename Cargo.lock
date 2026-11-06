@@ -106,7 +106,6 @@ name = "bench"
 version = "0.0.0"
 dependencies = [
  "glint-core",
- "jwalk",
 ]
 
 [[package]]
@@ -1184,6 +1183,7 @@ name = "glint-core"
 version = "0.0.0"
 dependencies = [
  "bytemuck",
+ "jwalk",
  "memchr",
  "memmap2",
  "nucleo-matcher",

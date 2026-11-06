@@ -2,9 +2,10 @@
 //!   bench [N] [--real [ROOT]] [--gate MS]
 //! Run with RAYON_NUM_THREADS=4 to model a mid-range machine. With --gate, exits 1 if any
 //! fast-path query exceeds MS at p95.
-use glint_core::{DirId, Index, Kind};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use glint_core::store::{refresh_in_background, Store};
+use glint_core::walk::{build_index, WalkConfig};
+use glint_core::{Index, Kind};
+use std::sync::Arc;
 use std::time::Instant;
 
 struct Rng(u64);
@@ -53,6 +54,16 @@ fn main() {
             .and_then(|i| args.get(i + 1))
             .map(std::path::PathBuf::from)
     };
+    if let Some(dir) = path_arg("--refresh-demo") {
+        refresh_demo(&dir);
+        if let Some(secs) = flag("--hold")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            std::thread::sleep(std::time::Duration::from_secs(secs));
+        }
+        return;
+    }
     let mut ix = Index::default();
     if let Some(p) = path_arg("--load") {
         let t = Instant::now();
@@ -68,38 +79,13 @@ fn main() {
             .filter(|a| !a.starts_with("--"))
             .cloned()
             .unwrap_or("C:\\".into());
-        let t = Instant::now();
-        let mut dirs: HashMap<PathBuf, DirId> = HashMap::new();
-        let mut skipped = 0usize;
-        for e in jwalk::WalkDir::new(&root)
-            .skip_hidden(false)
-            .follow_links(false)
-            .into_iter()
-            .flatten()
-        {
-            if e.depth() == 0 {
-                dirs.insert(e.path(), ix.add_dir(None, &root));
-                continue;
-            }
-            // A missing parent means an ancestor's name was not valid UTF-8 and was skipped.
-            let (Some(name), Some(&parent)) = (e.file_name().to_str(), dirs.get(e.parent_path()))
-            else {
-                skipped += 1;
-                continue;
-            };
-            if e.file_type().is_dir() {
-                ix.push(name, parent, Kind::Dir);
-                dirs.insert(e.path(), ix.add_dir(Some(parent), name));
-            } else {
-                ix.push(name, parent, Kind::File);
-            }
-        }
-        println!(
-            "walked {root}: {} entries, {} folders, {skipped} skipped, in {:?}",
-            ix.len(),
-            ix.dir_count(),
-            t.elapsed()
-        );
+        ix = walk_and_report(&WalkConfig {
+            roots: vec![root.into()],
+            exclude_dirs: Vec::new(),
+            threads: 4,
+        });
+    } else if flag("--user").is_some() {
+        ix = walk_and_report(&WalkConfig::for_current_user());
     } else {
         let words = [
             "report",
@@ -210,6 +196,59 @@ fn main() {
         }
         println!("gate ok (<= {limit} ms)");
     }
+}
+
+fn walk_and_report(cfg: &WalkConfig) -> Index {
+    let t = Instant::now();
+    let (ix, stats) = build_index(cfg);
+    println!(
+        "walked {:?}: {} entries, {} folders, {} bad names, {} unreadable, in {:?}",
+        cfg.roots,
+        ix.len(),
+        ix.dir_count(),
+        stats.skipped_names,
+        stats.unreadable,
+        t.elapsed()
+    );
+    ix
+}
+
+/// Open a store, reindex in the background, and time searches while that runs.
+fn refresh_demo(dir: &std::path::Path) {
+    let t = Instant::now();
+    let store = Arc::new(Store::open(dir).expect("open store"));
+    println!(
+        "store opened in {:?} with {} entries",
+        t.elapsed(),
+        store.current().len()
+    );
+    let t = Instant::now();
+    let job = refresh_in_background(store.clone(), WalkConfig::for_current_user());
+    let mut during = Vec::new();
+    while !job.is_finished() {
+        let ix = store.current();
+        let s = Instant::now();
+        std::hint::black_box(ix.search("ter", 20));
+        during.push(s.elapsed().as_secs_f64() * 1e3);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let stats = job.join().unwrap().expect("refresh");
+    println!(
+        "refreshed in {:?}: {} entries, {} folders, {stats:?}",
+        t.elapsed(),
+        store.current().len(),
+        store.current().dir_count()
+    );
+    println!(
+        "{} searches during refresh: p50 {:.1} ms, p95 {:.1} ms, max {:.1} ms",
+        during.len(),
+        pct(&mut during, 0.5),
+        pct(&mut during, 0.95),
+        pct(&mut during, 1.0)
+    );
+    let (p50, p95, _) = time(|| store.current().search("ter", 20).len(), 40);
+    println!("after refresh: p50 {p50:.1} ms, p95 {p95:.1} ms");
+    println!("holding pid {}", std::process::id());
 }
 
 /// Check a sample of rebuilt paths against the real disk.

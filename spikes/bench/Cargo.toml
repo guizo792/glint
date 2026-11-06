@@ -5,4 +5,3 @@ edition = "2021"
 
 [dependencies]
 glint-core = { path = "../../crates/glint-core" }
-jwalk = "0.8"

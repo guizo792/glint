@@ -4,6 +4,9 @@
 //! (word-start matches only for 1–2 character queries). Stage 2 fuzzy-scores only
 //! those candidates. A slower full subsequence scan, [`Index::search_fuzzy`], exists
 //! for callers that want to stream in looser matches after the fast results.
+pub mod store;
+pub mod walk;
+
 use memchr::memmem;
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -332,8 +335,8 @@ impl Index {
     }
 
     /// Open a snapshot memory-mapped and read-only: nothing is parsed or copied, and the OS
-    /// pages data in on demand. The file must not be modified while open ([`Index::save`]
-    /// replaces it atomically, which is safe).
+    /// pages data in on demand. The file must not be modified in place while open;
+    /// [`Index::save`] replaces it by rename, and the open index keeps reading the old data.
     pub fn open(path: &Path) -> io::Result<Index> {
         let file = std::fs::File::open(path)?;
         // SAFETY: the snapshot is only ever replaced by rename, never modified in place.
