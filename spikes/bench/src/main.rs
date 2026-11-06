@@ -84,8 +84,8 @@ fn main() {
             exclude_dirs: Vec::new(),
             threads: 4,
         });
-    } else if flag("--user").is_some() {
-        ix = walk_and_report(&WalkConfig::for_current_user());
+    } else if flag("--pc").is_some() {
+        ix = walk_and_report(&WalkConfig::whole_pc());
     } else {
         let words = [
             "report",
@@ -149,6 +149,16 @@ fn main() {
             std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0) as f64 / 1e6,
             t.elapsed()
         );
+    }
+
+    if let Some(i) = flag("--show") {
+        for q in &args[i + 1..] {
+            println!("\n{q}:");
+            for h in ix.search(q, 6) {
+                println!("  {}", ix.path(h.id).display());
+            }
+        }
+        return;
     }
 
     println!("\nquery           fast p50 / p95 ms   hits    brute-force p50 / p95 ms");
@@ -223,7 +233,7 @@ fn refresh_demo(dir: &std::path::Path) {
         store.current().len()
     );
     let t = Instant::now();
-    let job = refresh_in_background(store.clone(), WalkConfig::for_current_user());
+    let job = refresh_in_background(store.clone(), WalkConfig::whole_pc());
     let mut during = Vec::new();
     while !job.is_finished() {
         let ix = store.current();

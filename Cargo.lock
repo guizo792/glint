@@ -1188,6 +1188,7 @@ dependencies = [
  "memmap2",
  "nucleo-matcher",
  "rayon",
+ "windows",
 ]
 
 [[package]]

@@ -10,3 +10,6 @@ rayon = "1"
 memmap2 = "0.9"
 bytemuck = "1"
 jwalk = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Storage_FileSystem"] }

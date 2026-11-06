@@ -21,13 +21,21 @@ compile_error!("snapshot format is little-endian only");
 /// Names scanned per parallel task.
 const CHUNK: usize = 32_768;
 
-const MAGIC: &[u8; 8] = b"GLNTIDX2";
+const MAGIC: &[u8; 8] = b"GLNTIDX3";
 const HEADER: usize = 48;
 
 /// `dir_parents` value for a root folder.
 const NO_PARENT: u32 = u32::MAX;
 /// Set in an `entry_dirs` value when the entry is itself a folder.
 const IS_DIR_BIT: u32 = 1 << 31;
+/// Set in an `entry_dirs` value when the entry ranks below normal results.
+const LOW_PRIORITY_BIT: u32 = 1 << 30;
+/// The folder id part of an `entry_dirs` value.
+const DIR_MASK: u32 = LOW_PRIORITY_BIT - 1;
+/// Score bonus for results outside low-priority folders. Exceeds any raw match score.
+const NORMAL_TIER: u32 = 1 << 20;
+/// Score bonus when the whole name is the query. Outranks [`NORMAL_TIER`].
+const EXACT_TIER: u32 = 2 * NORMAL_TIER;
 
 /// Byte storage: heap while building, or a read-only window into a memory-mapped snapshot.
 enum Bytes {
@@ -171,7 +179,10 @@ pub struct Hit {
 
 /// A folder in the index's folder table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DirId(u32);
+pub struct DirId {
+    id: u32,
+    low_priority: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -190,7 +201,7 @@ pub struct Index {
     folded: Bytes,
     /// End offset (past the terminator) of each name in `folded`.
     fold_ends: Words,
-    /// Containing folder of each entry, with [`IS_DIR_BIT`] set for folder entries.
+    /// Containing folder of each entry, plus [`IS_DIR_BIT`] and [`LOW_PRIORITY_BIT`] flags.
     entry_dirs: Words,
     /// Parent of each folder, always a lower id, or [`NO_PARENT`] for a root.
     dir_parents: Words,
@@ -220,28 +231,47 @@ impl Index {
     /// as a [`Kind::Dir`] entry for that. Panics on an unknown parent or a read-only index.
     pub fn add_dir(&mut self, parent: Option<DirId>, name: &str) -> DirId {
         let id = self.dir_parents.get().len() as u32;
-        assert!(id < IS_DIR_BIT, "too many folders");
-        let parent = parent.map_or(NO_PARENT, |p| {
-            assert!(p.0 < id, "unknown parent folder");
-            p.0
+        assert!(id < LOW_PRIORITY_BIT, "too many folders");
+        let parent_id = parent.map_or(NO_PARENT, |p| {
+            assert!(p.id < id, "unknown parent folder");
+            p.id
         });
-        self.dir_parents.owned_mut().push(parent);
+        self.dir_parents.owned_mut().push(parent_id);
         let dir_names = self.dir_names.owned_mut();
         dir_names.extend_from_slice(name.as_bytes());
         self.dir_name_ends.owned_mut().push(dir_names.len() as u32);
-        DirId(id)
+        DirId {
+            id,
+            low_priority: parent.is_some_and(|p| p.low_priority),
+        }
+    }
+
+    /// Like [`Index::add_dir`], but everything inside the folder ranks below normal results.
+    pub fn add_low_priority_dir(&mut self, parent: Option<DirId>, name: &str) -> DirId {
+        DirId {
+            low_priority: true,
+            ..self.add_dir(parent, name)
+        }
     }
 
     /// Append a searchable entry. Panics on an unknown folder or a read-only index.
     pub fn push(&mut self, name: &str, dir: DirId, kind: Kind) {
         assert!(
-            (dir.0 as usize) < self.dir_parents.get().len(),
+            (dir.id as usize) < self.dir_parents.get().len(),
             "unknown folder"
         );
-        self.entry_dirs.owned_mut().push(match kind {
-            Kind::File => dir.0,
-            Kind::Dir => dir.0 | IS_DIR_BIT,
-        });
+        let kind_bit = match kind {
+            Kind::File => 0,
+            Kind::Dir => IS_DIR_BIT,
+        };
+        let low_bit = if dir.low_priority {
+            LOW_PRIORITY_BIT
+        } else {
+            0
+        };
+        self.entry_dirs
+            .owned_mut()
+            .push(dir.id | kind_bit | low_bit);
         let names = self.names.owned_mut();
         names.extend_from_slice(name.as_bytes());
         self.name_ends.owned_mut().push(names.len() as u32);
@@ -402,7 +432,7 @@ impl Index {
             .entry_dirs
             .get()
             .iter()
-            .any(|&d| (d & !IS_DIR_BIT) as usize >= parents.len())
+            .any(|&d| (d & DIR_MASK) as usize >= parents.len())
         {
             return Err(corrupt("bad entry folder"));
         }
@@ -422,7 +452,7 @@ impl Index {
     pub fn path(&self, id: u32) -> PathBuf {
         let parents = self.dir_parents.get();
         let mut parts = vec![self.name(id)];
-        let mut dir = self.entry_dirs.get()[id as usize] & !IS_DIR_BIT;
+        let mut dir = self.entry_dirs.get()[id as usize] & DIR_MASK;
         while dir != NO_PARENT {
             parts.push(self.dir_name(dir));
             dir = parents[dir as usize];
@@ -517,6 +547,14 @@ impl Index {
         self.score(&all, query.trim(), limit)
     }
 
+    /// Result order: exact names in normal folders, exact names in low-priority folders, other
+    /// matches in normal folders, other matches in low-priority folders.
+    fn tiered(&self, id: u32, score: u32, folded_query: &[u8]) -> u32 {
+        let low = self.entry_dirs.get()[id as usize] & LOW_PRIORITY_BIT != 0;
+        let exact = self.folded_name(id) == folded_query;
+        score + if low { 0 } else { NORMAL_TIER } + if exact { EXACT_TIER } else { 0 }
+    }
+
     /// 1–2 character queries match huge numbers of names, so skip the fuzzy matcher:
     /// name-prefix matches first, then shorter names.
     fn score_cheap(&self, ids: &[u32], folded_query: &str, limit: usize) -> Vec<Hit> {
@@ -531,7 +569,7 @@ impl Index {
                         let base = if name.starts_with(q) { 100_000 } else { 50_000 };
                         Hit {
                             id,
-                            score: base - name.len().min(255) as u32,
+                            score: self.tiered(id, base - name.len().min(255) as u32, q),
                         }
                     })
                     .collect();
@@ -554,6 +592,7 @@ impl Index {
             Normalization::Smart,
             AtomKind::Fuzzy,
         );
+        let folded_query = query.to_lowercase();
         let mut hits: Vec<Hit> = ids
             .par_chunks(CHUNK)
             .map_init(
@@ -563,7 +602,10 @@ impl Index {
                         .iter()
                         .filter_map(|&id| {
                             pat.score(Utf32Str::new(self.name(id), buf), m)
-                                .map(|score| Hit { id, score })
+                                .map(|score| Hit {
+                                    id,
+                                    score: self.tiered(id, score, folded_query.as_bytes()),
+                                })
                         })
                         .collect();
                     keep_top(&mut out, limit);
@@ -736,7 +778,77 @@ mod tests {
         index(&["a"]).save(&path).unwrap();
         let mut ix = Index::open(&path).unwrap();
         let _ = std::fs::remove_file(&path);
-        ix.push("b", DirId(0), Kind::File);
+        ix.push(
+            "b",
+            DirId {
+                id: 0,
+                low_priority: false,
+            },
+            Kind::File,
+        );
+    }
+
+    fn tiered_index() -> Index {
+        let mut ix = Index::default();
+        let root = ix.add_dir(None, "root");
+        let system = ix.add_low_priority_dir(Some(root), "Windows");
+        let nested = ix.add_dir(Some(system), "System32");
+        ix.push("report.txt", system, Kind::File);
+        ix.push("hosts", nested, Kind::File);
+        ix.push("my_long_report_notes.txt", root, Kind::File);
+        ix.push("hosts_backup.txt", root, Kind::File);
+        ix
+    }
+
+    #[test]
+    fn low_priority_results_rank_below_weaker_normal_matches() {
+        let ix = tiered_index();
+        for hits in [ix.search("report", 10), ix.search_fuzzy("report", 10)] {
+            assert_eq!(
+                names(&ix, &hits),
+                ["my_long_report_notes.txt", "report.txt"]
+            );
+        }
+    }
+
+    #[test]
+    fn exact_name_beats_the_tier_and_folders_inherit_low_priority() {
+        let ix = tiered_index();
+        let hits = ix.search("hosts", 10);
+        assert_eq!(names(&ix, &hits)[0], "hosts");
+        assert_eq!(names(&ix, &ix.search("host", 10))[0], "hosts_backup.txt");
+    }
+
+    #[test]
+    fn exact_names_in_normal_folders_rank_above_exact_names_in_low_priority_ones() {
+        let mut ix = Index::default();
+        let root = ix.add_dir(None, "root");
+        let system = ix.add_low_priority_dir(Some(root), "AppData");
+        let docs = ix.add_dir(Some(root), "docs");
+        ix.push("plan.md", system, Kind::File);
+        ix.push("plan.md", docs, Kind::File);
+        let hits = ix.search("plan.md", 10);
+        assert_eq!(
+            ix.path(hits[0].id),
+            ["root", "docs", "plan.md"].iter().collect::<PathBuf>()
+        );
+    }
+
+    #[test]
+    fn low_priority_survives_snapshots_and_keeps_paths_correct() {
+        let path = temp_path("tier");
+        tiered_index().save(&path).unwrap();
+        let ix = Index::open(&path).unwrap();
+        assert_eq!(names(&ix, &ix.search("report", 10))[1], "report.txt");
+        assert_eq!(
+            ix.path(1),
+            ["root", "Windows", "System32", "hosts"]
+                .iter()
+                .collect::<PathBuf>()
+        );
+        assert_eq!(ix.kind(1), Kind::File);
+        drop(ix);
+        std::fs::remove_file(path).unwrap();
     }
 
     fn tree() -> Index {
