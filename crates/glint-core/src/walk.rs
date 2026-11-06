@@ -2,7 +2,7 @@
 use crate::{DirId, Index, Kind};
 use jwalk::{DirEntry, Parallelism, WalkDirGeneric};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 /// Folder names skipped by default (case-insensitive): machine-only contents nobody searches
@@ -32,6 +32,25 @@ fn is_low_priority(name: &str, depth: usize) -> bool {
     name.starts_with('.')
         || LOW_PRIORITY_ANYWHERE.contains(&name.as_str())
         || (depth == 1 && LOW_PRIORITY_AT_ROOT.contains(&name.as_str()))
+}
+
+/// Whether any folder on `path` is low priority.
+pub fn is_low_priority_path(path: &Path) -> bool {
+    normal_parts(path)
+        .enumerate()
+        .any(|(i, name)| is_low_priority(name, i + 1))
+}
+
+/// Whether any part of `path` is an excluded folder name.
+pub fn is_excluded_path(path: &Path, excludes: &[String]) -> bool {
+    normal_parts(path).any(|name| excludes.iter().any(|e| e.eq_ignore_ascii_case(name)))
+}
+
+fn normal_parts(path: &Path) -> impl Iterator<Item = &str> {
+    path.components().filter_map(|c| match c {
+        Component::Normal(name) => name.to_str(),
+        _ => None,
+    })
 }
 
 /// Every fixed drive. Removable and network drives are left out so that an unreachable one

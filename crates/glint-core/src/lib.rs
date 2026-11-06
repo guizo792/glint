@@ -4,6 +4,9 @@
 //! (word-start matches only for 1–2 character queries). Stage 2 fuzzy-scores only
 //! those candidates. A slower full subsequence scan, [`Index::search_fuzzy`], exists
 //! for callers that want to stream in looser matches after the fast results.
+pub mod history;
+pub mod live;
+pub mod query;
 pub mod store;
 pub mod walk;
 
@@ -14,6 +17,7 @@ use rayon::prelude::*;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use unicode_normalization::UnicodeNormalization;
 
 #[cfg(not(target_endian = "little"))]
 compile_error!("snapshot format is little-endian only");
@@ -21,7 +25,7 @@ compile_error!("snapshot format is little-endian only");
 /// Names scanned per parallel task.
 const CHUNK: usize = 32_768;
 
-const MAGIC: &[u8; 8] = b"GLNTIDX3";
+const MAGIC: &[u8; 8] = b"GLNTIDX4";
 const HEADER: usize = 48;
 
 /// `dir_parents` value for a root folder.
@@ -275,7 +279,7 @@ impl Index {
         let names = self.names.owned_mut();
         names.extend_from_slice(name.as_bytes());
         self.name_ends.owned_mut().push(names.len() as u32);
-        let lower = name.to_lowercase();
+        let lower = fold(name);
         let folded = self.folded.owned_mut();
         folded.extend_from_slice(lower.replace('\0', " ").as_bytes());
         folded.push(0);
@@ -516,7 +520,7 @@ impl Index {
 
     /// Fast path: substring candidates, fuzzy-scored. Best first, ties broken by id.
     pub fn search(&self, query: &str, limit: usize) -> Vec<Hit> {
-        let folded_q = query.trim().to_lowercase();
+        let folded_q = fold(query.trim());
         let terms: Vec<&str> = folded_q.split_whitespace().collect();
         let Some(anchor) = terms.iter().max_by_key(|t| t.chars().count()) else {
             return Vec::new();
@@ -592,7 +596,14 @@ impl Index {
             Normalization::Smart,
             AtomKind::Fuzzy,
         );
-        let folded_query = query.to_lowercase();
+        let folded_query = fold(query);
+        // Accents can differ either way, so fall back to comparing the folded forms.
+        let folded_pat = Pattern::new(
+            &folded_query,
+            CaseMatching::Ignore,
+            Normalization::Never,
+            AtomKind::Fuzzy,
+        );
         let mut hits: Vec<Hit> = ids
             .par_chunks(CHUNK)
             .map_init(
@@ -602,6 +613,10 @@ impl Index {
                         .iter()
                         .filter_map(|&id| {
                             pat.score(Utf32Str::new(self.name(id), buf), m)
+                                .or_else(|| {
+                                    let name = std::str::from_utf8(self.folded_name(id)).ok()?;
+                                    folded_pat.score(Utf32Str::new(name, buf), m)
+                                })
                                 .map(|score| Hit {
                                     id,
                                     score: self.tiered(id, score, folded_query.as_bytes()),
@@ -617,6 +632,18 @@ impl Index {
         keep_top(&mut hits, limit);
         hits
     }
+}
+
+/// Case- and accent-insensitive form used for matching: `Résumé` becomes `resume`.
+pub fn fold(s: &str) -> String {
+    let lower = s.to_lowercase();
+    if lower.is_ascii() {
+        return lower;
+    }
+    lower
+        .nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .collect()
 }
 
 fn better(a: &Hit, b: &Hit) -> std::cmp::Ordering {
@@ -670,6 +697,13 @@ mod tests {
         assert_eq!(names(&ix, &ix.search("résu", 10)), ["résumé.pdf"]);
         assert_eq!(names(&ix, &ix.search("تقر", 10)), ["تقرير.docx"]);
         assert_eq!(names(&ix, &ix.search("文档", 10)), ["文档.txt"]);
+    }
+
+    #[test]
+    fn matches_ignore_accents_in_either_direction() {
+        let ix = index(&["résumé.pdf", "cafe.txt"]);
+        assert_eq!(names(&ix, &ix.search("resume", 10)), ["résumé.pdf"]);
+        assert_eq!(names(&ix, &ix.search("café", 10)), ["cafe.txt"]);
     }
 
     #[test]
