@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import * as api from "./api";
-  import type { Config, Settings } from "./api";
+  import type { Config, Installed, Settings } from "./api";
   import { setLanguage, t } from "./i18n";
 
   let { welcome = false }: { welcome?: boolean } = $props();
@@ -12,6 +12,9 @@
   let excludes = $state("");
   let message = $state("");
   let error = $state("");
+  let extensions = $state<Installed[]>([]);
+  let installUrl = $state("");
+  let installing = $state(false);
 
   async function load() {
     const loaded = await api.getSettings();
@@ -22,6 +25,7 @@
     roots = loaded.config.extra_roots.join("\n");
     excludes = loaded.config.extra_excludes.join("\n");
     if (welcome) config.autostart = true;
+    extensions = await api.listExtensions();
   }
 
   const lines = (text: string) => text.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -42,6 +46,41 @@
   async function copyDiagnostics() {
     await api.diagnostics();
     message = t("copied");
+  }
+
+  function toggleExtension(folder: string, on: boolean) {
+    if (!config) return;
+    const others = config.enabled_extensions.filter((f) => f !== folder);
+    config.enabled_extensions = on ? [...others, folder] : others;
+  }
+
+  async function reloadExtensions() {
+    await api.reloadExtensions();
+    extensions = await api.listExtensions();
+  }
+
+  async function install() {
+    error = "";
+    installing = true;
+    try {
+      await api.installExtension(installUrl.trim());
+      installUrl = "";
+      extensions = await api.listExtensions();
+    } catch (e) {
+      error = String(e);
+    }
+    installing = false;
+  }
+
+  async function remove(folder: string) {
+    error = "";
+    try {
+      await api.removeExtension(folder);
+      toggleExtension(folder, false);
+      extensions = await api.listExtensions();
+    } catch (e) {
+      error = String(e);
+    }
   }
 
   /** Turn a key press into a hotkey string such as Ctrl+Shift+K. */
@@ -132,6 +171,36 @@
       </section>
 
       <section>
+        <h2>{t("extensions")}</h2>
+        <p class="warn">{t("extensionsWarning")}</p>
+        {#each extensions as ext (ext.folder)}
+          <div class="extension">
+            <label class="row">
+              <input
+                type="checkbox"
+                checked={config.enabled_extensions.includes(ext.folder)}
+                onchange={(e) => toggleExtension(ext.folder, e.currentTarget.checked)}
+              />
+              {ext.manifest.name} {ext.manifest.version}
+            </label>
+            <small>
+              {t("triggers")}: {ext.manifest.trigger}.
+              {t("permissions")}: {ext.manifest.permissions.join(", ") || "-"}
+            </small>
+            {#if ext.error}<small class="error">{ext.error}</small>{/if}
+            <button onclick={() => remove(ext.folder)}>{t("remove")}</button>
+          </div>
+        {:else}
+          <p>{t("extensionsNone")}</p>
+        {/each}
+        <div class="buttons">
+          <input aria-label={t("installHint")} placeholder={t("installHint")} bind:value={installUrl} />
+          <button disabled={installing || !installUrl.trim()} onclick={install}>{t("install")}</button>
+          <button onclick={reloadExtensions}>{t("reload")}</button>
+        </div>
+      </section>
+
+      <section>
         <h2>{t("advanced")}</h2>
         <div class="buttons">
           <button onclick={() => api.openConfigFile()}>{t("editConfig")}</button>
@@ -215,5 +284,18 @@
   }
   .error {
     color: var(--danger);
+  }
+  .warn {
+    margin-top: 0;
+    font-size: 13px;
+  }
+  .extension {
+    padding: 8px 0;
+  }
+  .extension label {
+    margin-bottom: 2px;
+  }
+  .extension button {
+    margin-top: 6px;
   }
 </style>

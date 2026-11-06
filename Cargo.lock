@@ -1402,6 +1402,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "glint-core",
+ "glint-ext",
  "glint-win",
  "serde",
  "serde_json",
@@ -1427,6 +1428,15 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "unicode-normalization",
  "windows",
+]
+
+[[package]]
+name = "glint-ext"
+version = "0.0.0"
+dependencies = [
+ "glint-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

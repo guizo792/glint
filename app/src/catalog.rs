@@ -64,19 +64,15 @@ pub fn items() -> Vec<Item> {
             item
         })
         .collect();
-    items.extend(
-        SETTINGS_PAGES
-            .iter()
-            .map(|(title, target)| {
-                Item::new(
-                    format!("setting:{target}"),
-                    title.to_string(),
-                    "Windows settings".to_string(),
-                    ItemKind::Setting,
-                    Target::Url(target.to_string()),
-                )
-            }),
-    );
+    items.extend(SETTINGS_PAGES.iter().map(|(title, target)| {
+        Item::new(
+            format!("setting:{target}"),
+            title.to_string(),
+            "Windows settings".to_string(),
+            ItemKind::Setting,
+            Target::Url(target.to_string()),
+        )
+    }));
     items
 }
 

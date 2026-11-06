@@ -1,0 +1,8 @@
+{
+  "id": "timestamp-typescript",
+  "name": "Timestamp converter",
+  "version": "1.0.0",
+  "trigger": "ts",
+  "command": ["node", "main.ts"],
+  "permissions": ["clipboard"]
+}

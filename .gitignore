@@ -5,3 +5,5 @@ bin/
 node_modules/
 app/ui/dist/
 app/gen/
+extensions/*/target/
+extensions/*/Cargo.lock

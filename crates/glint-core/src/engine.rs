@@ -123,10 +123,12 @@ pub fn actions_for(kind: ItemKind) -> Vec<&'static str> {
             "forget",
         ],
         ItemKind::App => vec!["open", "admin", "copy_name", "pin", "hide", "forget"],
-        ItemKind::Command | ItemKind::Setting | ItemKind::Extension => {
-            vec!["open", "pin", "hide", "forget"]
-        }
-        ItemKind::Window | ItemKind::Clipboard | ItemKind::Calc | ItemKind::Web => vec!["open"],
+        ItemKind::Command | ItemKind::Setting => vec!["open", "pin", "hide", "forget"],
+        ItemKind::Window
+        | ItemKind::Clipboard
+        | ItemKind::Calc
+        | ItemKind::Web
+        | ItemKind::Extension => vec!["open"],
     }
 }
 
@@ -612,7 +614,11 @@ impl Engine {
         // These are transient: the same key would mean something else next time.
         if matches!(
             item.kind,
-            ItemKind::Window | ItemKind::Clipboard | ItemKind::Calc | ItemKind::Web
+            ItemKind::Window
+                | ItemKind::Clipboard
+                | ItemKind::Calc
+                | ItemKind::Web
+                | ItemKind::Extension
         ) {
             return;
         }

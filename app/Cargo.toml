@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 glint-core = { path = "../crates/glint-core" }
+glint-ext = { path = "../crates/glint-ext" }
 glint-win = { path = "../crates/glint-win" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"

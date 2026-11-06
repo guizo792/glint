@@ -11,6 +11,7 @@ use glint_core::engine::{
 use glint_core::live::{watch, Live};
 use glint_core::store::Store;
 use glint_core::walk::{WalkConfig, DEFAULT_EXCLUDES};
+use glint_ext::{Effect, Host, Installed};
 use glint_win::{apps, autostart, clipboard, icons, shell, windows_list};
 use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
@@ -71,6 +72,9 @@ impl Paths {
     fn icons(&self) -> PathBuf {
         self.data_dir.join("icons")
     }
+    fn extensions(&self) -> PathBuf {
+        self.config_dir.join("extensions")
+    }
     fn log(&self) -> PathBuf {
         self.data_dir.join("logs").join("glint.log")
     }
@@ -110,6 +114,7 @@ struct State {
     live: Arc<Live>,
     apps: Arc<Apps>,
     clips: Arc<ClipboardHistory>,
+    extensions: Arc<Host>,
     clip_monitor: Mutex<Option<clipboard::Monitor>>,
     walk: WalkConfig,
     rebuild_requested: std::sync::atomic::AtomicBool,
@@ -123,6 +128,7 @@ fn build_engine(
     live: &Arc<Live>,
     apps: &Arc<Apps>,
     clips: &Arc<ClipboardHistory>,
+    extensions: &Arc<Host>,
 ) -> Arc<Engine> {
     let web = Arc::new(Web {
         bangs: config.bangs.clone(),
@@ -144,6 +150,7 @@ fn build_engine(
             clips.clone(),
             Arc::new(Calculator),
             web.clone(),
+            extensions.clone(),
         ],
         web,
         paths.history(),
@@ -163,7 +170,9 @@ fn apply_config(app: &AppHandle, state: &State) {
         &state.live,
         &state.apps,
         &state.clips,
+        &state.extensions,
     );
+    state.extensions.set_enabled(&config.enabled_extensions);
     register_hotkey(app, state, &config.hotkey);
     if let Ok(exe) = std::env::current_exe() {
         let command = format!("\"{}\"", exe.display());
@@ -321,7 +330,7 @@ async fn search(
     Ok(SearchResults { generation, items })
 }
 
-fn open_target(item: &Item) -> Result<(), String> {
+fn open_target(state: &State, item: &Item) -> Result<(), String> {
     let message = |e: glint_win::Error| e.message();
     match &item.target {
         Target::Path(path) => shell::open(&path.to_string_lossy()).map_err(message),
@@ -334,7 +343,15 @@ fn open_target(item: &Item) -> Result<(), String> {
         Target::Window(handle) => windows_list::activate(*handle)
             .then_some(())
             .ok_or_else(|| "That window has closed.".to_string()),
-        Target::Extension { .. } => Err("Extensions are not available.".to_string()),
+        Target::Extension { extension, id } => {
+            for effect in state.extensions.run(extension, id)? {
+                match effect {
+                    Effect::Copy { text } => clipboard::set_text(&text).map_err(message)?,
+                    Effect::OpenUrl { url } => shell::open(&url).map_err(message)?,
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -373,7 +390,7 @@ fn run_item(
         "open" => {
             // Hide first: switching windows needs Glint out of the way.
             hide();
-            open_target(&item)?;
+            open_target(&state, &item)?;
             engine.record_open(&query, &item, now());
         }
         "admin" => {
@@ -599,6 +616,29 @@ fn clear_clipboard_history(state: tauri::State<'_, State>) {
     state.clips.clear();
 }
 
+#[tauri::command]
+fn list_extensions(state: tauri::State<'_, State>) -> Vec<Installed> {
+    state.extensions.list()
+}
+
+#[tauri::command]
+fn reload_extensions(state: tauri::State<'_, State>) {
+    state.extensions.reload();
+}
+
+#[tauri::command]
+async fn install_extension(state: tauri::State<'_, State>, url: String) -> Result<String, String> {
+    let host = state.extensions.clone();
+    tauri::async_runtime::spawn_blocking(move || host.install(&url))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn remove_extension(state: tauri::State<'_, State>, folder: String) -> Result<(), String> {
+    state.extensions.remove(&folder)
+}
+
 /// Versions and counts for bug reports. Contains no file paths.
 #[tauri::command]
 fn diagnostics(state: tauri::State<'_, State>) -> Result<String, String> {
@@ -766,7 +806,8 @@ fn main() {
     let live = Arc::new(Live::new(store, excludes));
     let apps_provider = Arc::new(Apps::default());
     let clips = Arc::new(ClipboardHistory::default());
-    let engine = build_engine(&paths, &config, &live, &apps_provider, &clips);
+    let extensions = Arc::new(Host::new(paths.extensions(), &config.enabled_extensions));
+    let engine = build_engine(&paths, &config, &live, &apps_provider, &clips, &extensions);
     let stamp = config_stamp(&paths.config());
 
     let state = State {
@@ -779,6 +820,7 @@ fn main() {
         live: live.clone(),
         apps: apps_provider.clone(),
         clips,
+        extensions,
         clip_monitor: Mutex::new(None),
         walk: walk.clone(),
         rebuild_requested: false.into(),
@@ -815,6 +857,10 @@ fn main() {
             clear_clipboard_history,
             diagnostics,
             trace,
+            list_extensions,
+            reload_extensions,
+            install_extension,
+            remove_extension,
         ])
         .on_window_event(|window, event| {
             if window.label() == "launcher" {

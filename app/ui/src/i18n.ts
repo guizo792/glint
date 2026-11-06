@@ -63,6 +63,7 @@ const en = {
   permissions: "Declares",
   enable: "Enabled",
   remove: "Remove",
+  reload: "Reload",
 };
 
 type Key = keyof typeof en;
@@ -132,6 +133,7 @@ const fr: Partial<Record<Key, string>> = {
   permissions: "Déclare",
   enable: "Activée",
   remove: "Supprimer",
+  reload: "Recharger",
 };
 
 let language = "en";

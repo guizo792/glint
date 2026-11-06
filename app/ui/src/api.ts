@@ -43,6 +43,17 @@ export interface Settings {
   trace: boolean;
 }
 
+export interface Installed {
+  folder: string;
+  manifest: { id: string; name: string; version: string; trigger: string; permissions: string[] };
+  enabled: boolean;
+  error: string | null;
+}
+
+export const listExtensions = () => invoke<Installed[]>("list_extensions");
+export const reloadExtensions = () => invoke<void>("reload_extensions");
+export const installExtension = (url: string) => invoke<string>("install_extension", { url });
+export const removeExtension = (folder: string) => invoke<void>("remove_extension", { folder });
 export const search = (query: string, generation: number, fuzzy: boolean) =>
   invoke<{ generation: number; items: Item[] }>("search", { query, generation, fuzzy });
 export const runItem = (key: string, action: Action, query: string) =>
