@@ -33,7 +33,9 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 const WIDTH: f64 = 680.0;
 const LOG_LIMIT: u64 = 1024 * 1024;
 const APP_REFRESH: Duration = Duration::from_secs(300);
-const INDEX_CHECK: Duration = Duration::from_secs(60);
+const INDEX_CHECK: Duration = Duration::from_secs(5);
+/// Heavy disk activity can overflow the watcher, so limit rebuilds that causes.
+const MIN_FORCED_REBUILD_GAP: Duration = Duration::from_secs(600);
 /// Do not rebuild at startup if the snapshot is newer than this.
 const FRESH_SNAPSHOT: Duration = Duration::from_secs(3600);
 const STARTUP_DELAY: Duration = Duration::from_secs(10);
@@ -174,10 +176,13 @@ fn apply_config(app: &AppHandle, state: &State) {
     );
     state.extensions.set_enabled(&config.enabled_extensions);
     register_hotkey(app, state, &config.hotkey);
-    if let Ok(exe) = std::env::current_exe() {
-        let command = format!("\"{}\"", exe.display());
-        if let Err(e) = autostart::set("Glint", &command, config.autostart) {
-            log(&state.paths, &format!("autostart: {e}"));
+    // A test run with its own data folder must not touch the real autostart entry.
+    if std::env::var_os("GLINT_DATA_DIR").is_none() {
+        if let Ok(exe) = std::env::current_exe() {
+            let command = format!("\"{}\"", exe.display());
+            if let Err(e) = autostart::set("Glint", &command, config.autostart) {
+                log(&state.paths, &format!("autostart: {e}"));
+            }
         }
     }
     let mut monitor = state.clip_monitor.lock().unwrap();
@@ -295,17 +300,21 @@ fn open_settings_window(app: &AppHandle, route: &str) {
         return;
     }
     let url = WebviewUrl::App(format!("index.html#{route}").into());
-    let built = WebviewWindowBuilder::new(app, "settings", url)
-        .title("Glint Settings")
-        .inner_size(620.0, 700.0)
-        .min_inner_size(480.0, 400.0)
-        .build();
-    if let Err(e) = built {
-        log(
-            &app.state::<State>().paths,
-            &format!("settings window: {e}"),
-        );
-    }
+    let app = app.clone();
+    // Creating a webview from a synchronous handler deadlocks on Windows, so use a thread.
+    std::thread::spawn(move || {
+        let built = WebviewWindowBuilder::new(&app, "settings", url)
+            .title("Glint Settings")
+            .inner_size(620.0, 700.0)
+            .min_inner_size(480.0, 400.0)
+            .build();
+        if let Err(e) = built {
+            log(
+                &app.state::<State>().paths,
+                &format!("settings window: {e}"),
+            );
+        }
+    });
 }
 
 #[derive(Serialize)]
@@ -674,7 +683,8 @@ fn index_loop(app: AppHandle) {
         due |= last
             .elapsed()
             .is_ok_and(|e| e > Duration::from_secs(hours * 3600));
-        due |= state.live.take_needs_rebuild();
+        let gap_passed = last.elapsed().is_ok_and(|e| e > MIN_FORCED_REBUILD_GAP);
+        due |= gap_passed && state.live.take_needs_rebuild();
         due |= state
             .rebuild_requested
             .swap(false, std::sync::atomic::Ordering::Relaxed);
@@ -700,7 +710,7 @@ fn index_loop(app: AppHandle) {
             last = SystemTime::now();
             due = false;
         }
-        std::thread::sleep(INDEX_CHECK.min(Duration::from_secs(5)));
+        std::thread::sleep(INDEX_CHECK);
     }
 }
 

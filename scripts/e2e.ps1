@@ -15,12 +15,23 @@ Add-Type @'
 using System; using System.Runtime.InteropServices;
 public static class Keys2 {
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+  [StructLayout(LayoutKind.Sequential)] public struct LASTINPUT { public uint size; public uint time; }
+  [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUT i);
+  public static uint IdleMs() { var i = new LASTINPUT(); i.size = 8; GetLastInputInfo(ref i); return (uint)Environment.TickCount - i.time; }
+  public static string ForegroundTitle() { var s = new System.Text.StringBuilder(256); GetWindowText(GetForegroundWindow(), s, 256); return s.ToString(); }
   public static void AltSpace() {
     keybd_event(0x12,0,0,UIntPtr.Zero); keybd_event(0x20,0,0,UIntPtr.Zero);
     keybd_event(0x20,0,2,UIntPtr.Zero); keybd_event(0x12,0,2,UIntPtr.Zero);
   }
 }
 '@
+
+if ([Keys2]::IdleMs() -lt 20000) {
+    "SKIPPED: the keyboard or mouse was used in the last 20 seconds. Leave them alone and run again."
+    exit 3
+}
 
 function Shot($name) {
     $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -30,7 +41,12 @@ function Shot($name) {
     $bmp.Save("$Shots\$name.png")
     $g.Dispose(); $bmp.Dispose()
 }
-function Type-Text($text) { [System.Windows.Forms.SendKeys]::SendWait($text) }
+# Types only into Glint, so a failed hotkey cannot send keystrokes to another app.
+function Type-Text($text) {
+    $title = [Keys2]::ForegroundTitle()
+    if ($title -ne "Glint") { throw "Glint does not have focus (foreground is '$title'); not typing." }
+    [System.Windows.Forms.SendKeys]::SendWait($text)
+}
 
 $id = Get-Random -Maximum 99999999
 $base = "$env:TEMP\glint-e2e-$id"
@@ -88,6 +104,22 @@ try {
 
     Check "history saved" (Test-Path "$data\history.json")
 
+    # Settings opens without hanging (window creation can deadlock if done wrongly).
+    [Keys2]::AltSpace()
+    Start-Sleep -Milliseconds 300
+    Type-Text "^,"
+    $opened = $false
+    for ($i = 0; $i -lt 50 -and -not $opened; $i++) {
+        Start-Sleep -Milliseconds 100
+        $opened = [Keys2]::ForegroundTitle() -eq "Glint Settings"
+    }
+    Check "settings window opens" $opened
+    Start-Sleep -Milliseconds 800
+    Shot "6-settings"
+    if ($opened) { [System.Windows.Forms.SendKeys]::SendWait("%{F4}") }
+    Start-Sleep -Milliseconds 500
+    Check "app survives closing settings" (-not $proc.HasExited)
+
     # Show latency over repeated opens, and search latency while typing.
     for ($i = 0; $i -lt 30; $i++) {
         [Keys2]::AltSpace()
@@ -96,6 +128,7 @@ try {
         [Keys2]::AltSpace()
         Start-Sleep -Milliseconds 300
     }
+    Check "focus was on Glint for every keystroke" $true
     foreach ($metric in "show", "search") {
         $values = Select-String -Path "$data\logs\glint.log" -Pattern "trace $metric ([\d.]+)" |
             ForEach-Object { [double]$_.Matches[0].Groups[1].Value } | Sort-Object

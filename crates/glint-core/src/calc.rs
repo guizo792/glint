@@ -14,6 +14,11 @@ pub fn eval(input: &str) -> Option<f64> {
 /// Whether text looks like a calculation rather than a search, such as a bare year or `a-b`.
 pub fn looks_like_math(input: &str) -> bool {
     let t = input.trim();
+    // A date or part number such as 2024-11-06, not a subtraction.
+    let dashed = t.bytes().all(|b| b.is_ascii_digit() || b == b'-');
+    if dashed && t.matches('-').count() >= 2 {
+        return false;
+    }
     let has_digit = t.bytes().any(|b| b.is_ascii_digit());
     let has_op = t
         .bytes()
@@ -252,7 +257,7 @@ mod tests {
 
     #[test]
     fn does_not_mistake_searches_for_math() {
-        for s in ["2024", "report", "report-2024", "a-b"] {
+        for s in ["2024", "report", "report-2024", "a-b", "2024-11-06"] {
             assert!(!looks_like_math(s) || eval(s).is_none(), "{s}");
         }
         for s in ["2+2", "10 / 4", "sqrt(9)"] {

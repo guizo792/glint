@@ -498,8 +498,9 @@ pub struct Engine {
     web: Arc<Web>,
     pub history: Mutex<History>,
     history_path: PathBuf,
-    /// The last results, so the UI refers to results by key and cannot name arbitrary targets.
-    shown: Mutex<HashMap<String, Item>>,
+    /// The last two result sets, so the UI refers to results by key and cannot name arbitrary
+    /// targets. Two, because a slow search finishing late must not invalidate what is on screen.
+    shown: Mutex<[HashMap<String, Item>; 2]>,
 }
 
 impl Engine {
@@ -510,7 +511,7 @@ impl Engine {
             web,
             history: Mutex::new(history),
             history_path,
-            shown: Mutex::new(HashMap::new()),
+            shown: Mutex::default(),
         }
     }
 
@@ -520,7 +521,21 @@ impl Engine {
 
     /// Ranked results for the typed text. With `fuzzy`, includes the slower scattered matches.
     pub fn search(&self, input: &str, limit: usize, fuzzy: bool, now: u64) -> Vec<Item> {
-        let q = parse(input);
+        let mut q = parse(input);
+        // `w` and `c` are also ordinary words: if their mode finds nothing, search normally.
+        if matches!(q.mode, Mode::Windows | Mode::Clipboard) && !q.text.is_empty() {
+            let empty = self
+                .providers
+                .iter()
+                .all(|p| p.query(&q, 1, false).is_empty());
+            if empty {
+                q = Query {
+                    mode: Mode::All,
+                    text: input.trim().to_string(),
+                    ..q
+                };
+            }
+        }
         let history = self.history.lock().unwrap();
         let results = if input.trim().is_empty() {
             self.home_items(&history, limit, now)
@@ -580,8 +595,8 @@ impl Engine {
         };
         drop(history);
         let mut shown = self.shown.lock().unwrap();
-        shown.clear();
-        shown.extend(results.iter().map(|i| (i.key.clone(), i.clone())));
+        shown.swap(0, 1);
+        shown[0] = results.iter().map(|i| (i.key.clone(), i.clone())).collect();
         results
     }
 
@@ -604,9 +619,10 @@ impl Engine {
             .collect()
     }
 
-    /// A result from the latest search.
+    /// A result from a recent search.
     pub fn shown(&self, key: &str) -> Option<Item> {
-        self.shown.lock().unwrap().get(key).cloned()
+        let shown = self.shown.lock().unwrap();
+        shown.iter().find_map(|set| set.get(key).cloned())
     }
 
     /// Remember that a result was opened.
@@ -857,7 +873,33 @@ mod tests {
             f.engine.search("w mail", 10, false, 0)[0].target,
             Target::Window(7)
         );
-        assert!(f.engine.search("w nothing", 10, false, 0).is_empty());
+    }
+
+    #[test]
+    fn letter_prefixes_fall_back_to_normal_search_when_their_mode_finds_nothing() {
+        let f = fixture("prefix");
+        *f.apps.0.write().unwrap() = ItemList::new(vec![
+            Apps::item("C Drive Tool", "c.app"),
+            Apps::item("W Report Viewer", "w.app"),
+        ]);
+        assert_eq!(
+            titles(&f.engine.search("c drive", 10, false, 0)),
+            ["C Drive Tool"]
+        );
+        assert_eq!(
+            titles(&f.engine.search("w report", 10, false, 0))[0],
+            "W Report Viewer"
+        );
+        assert_eq!(
+            f.engine.search("w qqqqzzzz", 10, false, 0)[0].kind,
+            ItemKind::Web
+        );
+        // The mode still wins when it has something.
+        f.clips.add("drive secret".to_string());
+        assert_eq!(
+            titles(&f.engine.search("c drive", 10, false, 0)),
+            ["drive secret"]
+        );
     }
 
     #[test]
@@ -885,11 +927,14 @@ mod tests {
     }
 
     #[test]
-    fn only_results_from_the_latest_search_can_be_looked_up() {
+    fn only_recent_results_can_be_looked_up() {
         let f = fixture("shown");
         let item = f.engine.search("notepad", 10, false, 0).remove(0);
         assert_eq!(f.engine.shown(&item.key), Some(item.clone()));
+        // A slow search finishing after a newer one must not invalidate what is on screen.
         f.engine.search("terminal", 10, false, 0);
+        assert_eq!(f.engine.shown(&item.key), Some(item.clone()));
+        f.engine.search("report", 10, false, 0);
         assert_eq!(f.engine.shown(&item.key), None);
         assert_eq!(f.engine.shown("file:C:\\Windows\\System32\\cmd.exe"), None);
     }
