@@ -2,6 +2,18 @@
 
 A fast keyboard launcher for Windows 11. Press a hotkey, type a few letters, press Enter. It finds apps, files, folders, settings pages and open windows anywhere on your PC, learns what you pick, and sends nothing over the network.
 
+## Installing
+
+Glint is free and open source. Download the installer from the releases page, or build it yourself (below).
+
+**Windows may warn about the installer.** Releases are not code-signed yet, because signing certificates cost money and this is a free community project. SmartScreen then shows "Windows protected your PC". That warning means the file is new and unrecognised, not that it was found to be harmful. To continue, choose More info, then Run anyway. If you prefer not to, build from source: everything you run is then built from the code you can read.
+
+Each release lists a SHA-256 checksum, so you can confirm the file you downloaded is the one that was published:
+
+```bash
+certutil -hashfile Glint_0.1.0_x64-setup.exe SHA256
+```
+
 ## Using it
 
 Press `Alt+Space` (you can change this in Settings).
