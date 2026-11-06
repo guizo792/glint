@@ -122,6 +122,8 @@ struct State {
     rebuild_requested: std::sync::atomic::AtomicBool,
     index_status: RwLock<String>,
     icon_cache: Mutex<HashMap<String, String>>,
+    /// Newest search the UI asked for. Older ones still queued are skipped, not computed.
+    latest_search: Arc<std::sync::atomic::AtomicU64>,
 }
 
 fn build_engine(
@@ -332,10 +334,17 @@ async fn search(
 ) -> Result<SearchResults, String> {
     let engine = state.engine.read().unwrap().clone();
     let limit = state.config.read().unwrap().max_results;
-    let items =
-        tauri::async_runtime::spawn_blocking(move || engine.search(&query, limit, fuzzy, now()))
-            .await
-            .map_err(|e| e.to_string())?;
+    let latest = state.latest_search.clone();
+    latest.fetch_max(generation, std::sync::atomic::Ordering::SeqCst);
+    let items = tauri::async_runtime::spawn_blocking(move || {
+        // A newer keystroke arrived while this waited: the UI would discard the result anyway.
+        if latest.load(std::sync::atomic::Ordering::SeqCst) > generation {
+            return Vec::new();
+        }
+        engine.search(&query, limit, fuzzy, now())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(SearchResults { generation, items })
 }
 
@@ -836,6 +845,7 @@ fn main() {
         rebuild_requested: false.into(),
         index_status: RwLock::new("Starting".to_string()),
         icon_cache: Mutex::new(HashMap::new()),
+        latest_search: Arc::default(),
     };
 
     let result = tauri::Builder::default()

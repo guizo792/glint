@@ -124,7 +124,11 @@ try {
     for ($i = 0; $i -lt 30; $i++) {
         [Keys2]::AltSpace()
         Start-Sleep -Milliseconds 350
-        if ($i % 3 -eq 0) { Type-Text "report"; Start-Sleep -Milliseconds 150 }
+        if ($i % 3 -eq 0) {
+            # Typed at a human pace: one letter every 90 ms.
+            foreach ($c in "report".ToCharArray()) { Type-Text "$c"; Start-Sleep -Milliseconds 90 }
+            Start-Sleep -Milliseconds 150
+        }
         [Keys2]::AltSpace()
         Start-Sleep -Milliseconds 300
     }

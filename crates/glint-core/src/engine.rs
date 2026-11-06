@@ -519,7 +519,8 @@ impl Engine {
         self.providers.iter().find_map(|p| p.resolve(key))
     }
 
-    /// Ranked results for the typed text. With `fuzzy`, includes the slower scattered matches.
+    /// Ranked results for the typed text. With `fuzzy`, adds slower scattered matches to the
+    /// normal results.
     pub fn search(&self, input: &str, limit: usize, fuzzy: bool, now: u64) -> Vec<Item> {
         let mut q = parse(input);
         // `w` and `c` are also ordinary words: if their mode finds nothing, search normally.
@@ -548,7 +549,12 @@ impl Engine {
                 }
             };
             for p in &self.providers {
-                p.query(&q, limit, fuzzy).into_iter().for_each(&mut add);
+                p.query(&q, limit, false).into_iter().for_each(&mut add);
+                // The looser pass adds to the normal results. Providers without a slow path
+                // return nothing for it, so replacing would lose their answers.
+                if fuzzy {
+                    p.query(&q, limit, true).into_iter().for_each(&mut add);
+                }
             }
             // Bring back remembered results that fell outside the providers' limits.
             let plain =
@@ -840,6 +846,24 @@ mod tests {
             "1000 m"
         );
         assert!(!titles(&f.engine.search("2024", 10, false, 0)).contains(&"2024"));
+    }
+
+    #[test]
+    fn the_loose_pass_keeps_answers_from_sources_without_a_slow_path() {
+        let f = fixture("loose");
+        assert_eq!(f.engine.search("12*12", 10, true, 0)[0].title, "144");
+        assert_eq!(
+            titles(&f.engine.search("w mail", 10, true, 0)),
+            ["Inbox - Mail"]
+        );
+        f.clips.add("loose text".to_string());
+        assert_eq!(
+            titles(&f.engine.search("c loose", 10, true, 0)),
+            ["loose text"]
+        );
+        // And it still finds scattered matches the fast pass skips.
+        assert!(!titles(&f.engine.search("trmnlnts", 10, false, 0)).contains(&"terminal-notes.txt"));
+        assert!(titles(&f.engine.search("trmnlnts", 10, true, 0)).contains(&"terminal-notes.txt"));
     }
 
     #[test]
