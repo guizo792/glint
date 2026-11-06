@@ -1,0 +1,8 @@
+[package]
+name = "core"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+nucleo-matcher = "0.3"
+rayon = "1"
