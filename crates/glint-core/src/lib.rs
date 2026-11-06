@@ -4,6 +4,9 @@
 //! (word-start matches only for 1–2 character queries). Stage 2 fuzzy-scores only
 //! those candidates. A slower full subsequence scan, [`Index::search_fuzzy`], exists
 //! for callers that want to stream in looser matches after the fast results.
+pub mod calc;
+pub mod config;
+pub mod engine;
 pub mod history;
 pub mod live;
 pub mod query;
