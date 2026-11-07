@@ -31,6 +31,9 @@ use tauri::{
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const WIDTH: f64 = 680.0;
+/// WebView2 browser flags Tauri uses when none are given. Setting any flags replaces these, so
+/// they are repeated here to keep that behaviour.
+const DEFAULT_WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
 const LOG_LIMIT: u64 = 1024 * 1024;
 const APP_REFRESH: Duration = Duration::from_secs(300);
 const INDEX_CHECK: Duration = Duration::from_secs(5);
@@ -249,6 +252,42 @@ fn reload_config_if_changed(app: &AppHandle, state: &State) {
     }
 }
 
+/// Browser flags for every window. All windows must use the same flags, or WebView2 cannot
+/// share one browser process between them. `GLINT_WEBVIEW_ARGS` adds flags for experiments.
+fn webview_args() -> String {
+    match std::env::var("GLINT_WEBVIEW_ARGS") {
+        Ok(extra) if !extra.trim().is_empty() => format!("{DEFAULT_WEBVIEW_ARGS} {extra}"),
+        _ => DEFAULT_WEBVIEW_ARGS.to_string(),
+    }
+}
+
+/// A test instance keeps WebView2's profile in its own data folder. WebView2 refuses to open a
+/// profile that another running app already holds with different flags, so sharing the real
+/// Glint's profile would make a test instance fail to start.
+fn webview_data_dir() -> Option<PathBuf> {
+    std::env::var_os("GLINT_DATA_DIR").map(|dir| PathBuf::from(dir).join("webview"))
+}
+
+/// The search window. Created hidden at startup so showing it is only a visibility change.
+fn create_launcher(app: &AppHandle) -> tauri::Result<()> {
+    let mut builder =
+        WebviewWindowBuilder::new(app, "launcher", WebviewUrl::App("index.html".into()))
+            .title("Glint")
+            .inner_size(WIDTH, 84.0)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .visible(false)
+            .resizable(false)
+            .shadow(true)
+            .background_color(tauri::window::Color(30, 31, 38, 255))
+            .additional_browser_args(&webview_args());
+    if let Some(dir) = webview_data_dir() {
+        builder = builder.data_directory(dir);
+    }
+    builder.build().map(drop)
+}
+
 fn launcher(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("launcher")
 }
@@ -305,11 +344,15 @@ fn open_settings_window(app: &AppHandle, route: &str) {
     let app = app.clone();
     // Creating a webview from a synchronous handler deadlocks on Windows, so use a thread.
     std::thread::spawn(move || {
-        let built = WebviewWindowBuilder::new(&app, "settings", url)
+        let mut builder = WebviewWindowBuilder::new(&app, "settings", url)
             .title("Glint Settings")
             .inner_size(620.0, 700.0)
             .min_inner_size(480.0, 400.0)
-            .build();
+            .additional_browser_args(&webview_args());
+        if let Some(dir) = webview_data_dir() {
+            builder = builder.data_directory(dir);
+        }
+        let built = builder.build();
         if let Err(e) = built {
             log(
                 &app.state::<State>().paths,
@@ -848,10 +891,15 @@ fn main() {
         latest_search: Arc::default(),
     };
 
-    let result = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+    let mut builder = tauri::Builder::default();
+    // A test instance with its own data folder runs beside a real Glint, so it must not be
+    // redirected to it.
+    if std::env::var_os("GLINT_DATA_DIR").is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
             show_launcher(app);
-        }))
+        }));
+    }
+    let result = builder
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _, event| {
@@ -892,6 +940,7 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle().clone();
             let state = handle.state::<State>();
+            create_launcher(&handle)?;
             setup_tray(&handle)?;
             apply_config(&handle, &state);
             if let Ok(watcher) = watch(live.clone(), &walk.roots) {
