@@ -1,0 +1,26 @@
+{
+  "name": "glint-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.4"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@tauri-apps/cli": "2.12.4",
+    "@testing-library/svelte": "^5.4.2",
+    "@tsconfig/svelte": "5.0.8",
+    "jsdom": "^31.0.0",
+    "svelte": "5.57.3",
+    "svelte-check": "4.6.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.6",
+    "vitest": "^5.1.0"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "base64-rust",
+  "name": "Base64",
+  "version": "1.0.0",
+  "trigger": "b64",
+  "command": ["target/release/glint-base64.exe"],
+  "permissions": ["clipboard"]
+}
