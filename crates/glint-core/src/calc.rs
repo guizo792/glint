@@ -5,6 +5,7 @@ pub fn eval(input: &str) -> Option<f64> {
     let mut p = Parser {
         s: input.as_bytes(),
         i: 0,
+        pct: false,
     };
     let value = p.sum()?;
     p.skip();
@@ -35,6 +36,9 @@ const FUNCTIONS: &[&str] = &[
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
+    /// Whether the term just parsed was a lone percentage such as `6%`, which `+` and `-`
+    /// take as a share of the left side: `3 + 6%` is 3.18.
+    pct: bool,
 }
 
 impl Parser<'_> {
@@ -58,10 +62,13 @@ impl Parser<'_> {
         let mut v = self.product()?;
         loop {
             if self.eat(b'+') {
-                v += self.product()?;
+                let term = self.product()?;
+                v += if self.pct { v * term } else { term };
             } else if self.eat(b'-') {
-                v -= self.product()?;
+                let term = self.product()?;
+                v -= if self.pct { v * term } else { term };
             } else {
+                self.pct = false;
                 return Some(v);
             }
         }
@@ -69,29 +76,80 @@ impl Parser<'_> {
 
     fn product(&mut self) -> Option<f64> {
         let mut v = self.unary()?;
+        let mut lone_percent = self.pct;
         loop {
             if self.eat(b'*') {
                 v *= self.unary()?;
             } else if self.eat(b'/') {
                 v /= self.unary()?;
             } else if self.eat(b'%') {
+                // Reached only when an operand follows, so this is modulo.
                 v %= self.unary()?;
             } else {
+                self.pct = lone_percent;
                 return Some(v);
             }
+            lone_percent = false;
         }
     }
 
     fn unary(&mut self) -> Option<f64> {
+        self.pct = false;
         if self.eat(b'-') {
-            return Some(-self.unary()?);
+            let v = -self.unary()?;
+            self.pct = false;
+            return Some(v);
         }
         let base = self.atom()?;
         // `^` binds tighter than a leading minus and is right-associative.
         if self.eat(b'^') {
-            return Some(base.powf(self.unary()?));
+            let v = base.powf(self.unary()?);
+            self.pct = false;
+            return Some(v);
+        }
+        if self.percent_follows() {
+            self.eat(b'%');
+            let mut v = base / 100.0;
+            self.pct = true;
+            // `20% of 50` is 10.
+            if self.eat_word("of") {
+                v *= self.unary()?;
+                self.pct = false;
+            }
+            return Some(v);
         }
         Some(base)
+    }
+
+    /// Whether the next `%` is a percent sign, not modulo: nothing that starts an operand
+    /// follows it, except the word `of`.
+    fn percent_follows(&mut self) -> bool {
+        self.skip();
+        if self.s.get(self.i) != Some(&b'%') {
+            return false;
+        }
+        let mut j = self.i + 1;
+        while self.s.get(j).is_some_and(|b| b.is_ascii_whitespace()) {
+            j += 1;
+        }
+        let word_of = self.s[j..].starts_with(b"of")
+            && !self.s.get(j + 2).is_some_and(|b| b.is_ascii_alphanumeric());
+        word_of
+            || !self
+                .s
+                .get(j)
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'(' || *b == b'.')
+    }
+
+    fn eat_word(&mut self, word: &str) -> bool {
+        self.skip();
+        let end = self.i + word.len();
+        let matches = self.s[self.i..].starts_with(word.as_bytes())
+            && !self.s.get(end).is_some_and(|b| b.is_ascii_alphanumeric());
+        if matches {
+            self.i = end;
+        }
+        matches
     }
 
     fn atom(&mut self) -> Option<f64> {
@@ -249,6 +307,33 @@ mod tests {
     }
 
     #[test]
+    fn percentages_work_like_a_phone_calculator() {
+        let close = |input: &str, want: f64| {
+            let got = eval(input).unwrap_or_else(|| panic!("no result for {input}"));
+            assert!((got - want).abs() < 1e-9, "{input} = {got}, wanted {want}");
+        };
+        close("3 + 6%", 3.18);
+        close("100 - 10%", 90.0);
+        close("200 * 15%", 30.0);
+        close("50 / 50%", 100.0);
+        close("6%", 0.06);
+        close("(3 + 3) + 50%", 9.0);
+        close("20% of 50", 10.0);
+        close("20 % of 50", 10.0);
+        close("3 + 6% * 2", 3.12);
+        close("1000 + 10% + 10%", 1210.0);
+        close("1+2+3%", 3.09);
+    }
+
+    #[test]
+    fn modulo_still_works_when_an_operand_follows() {
+        assert_eq!(eval("7 % 3"), Some(1.0));
+        assert_eq!(eval("7 %3"), Some(1.0));
+        assert_eq!(eval("10 % (2 + 1)"), Some(1.0));
+        assert_eq!(eval("10 % sqrt(4)"), Some(0.0));
+    }
+
+    #[test]
     fn rejects_non_math_and_non_finite_results() {
         for bad in ["hello", "2 +", "1/0", "(1", "foo(2)", "2 2", ""] {
             assert_eq!(eval(bad), None, "{bad}");
@@ -260,7 +345,7 @@ mod tests {
         for s in ["2024", "report", "report-2024", "a-b", "2024-11-06"] {
             assert!(!looks_like_math(s) || eval(s).is_none(), "{s}");
         }
-        for s in ["2+2", "10 / 4", "sqrt(9)"] {
+        for s in ["2+2", "10 / 4", "sqrt(9)", "3 + 6%", "20% of 50"] {
             assert!(looks_like_math(s), "{s}");
         }
     }

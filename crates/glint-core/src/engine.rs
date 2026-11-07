@@ -845,6 +845,8 @@ mod tests {
             f.engine.search("1 km to m", 10, false, 0)[0].title,
             "1000 m"
         );
+        assert_eq!(f.engine.search("3 + 6%", 10, false, 0)[0].title, "3.18");
+        assert_eq!(f.engine.search("20% of 50", 10, true, 0)[0].title, "10");
         assert!(!titles(&f.engine.search("2024", 10, false, 0)).contains(&"2024"));
     }
 
