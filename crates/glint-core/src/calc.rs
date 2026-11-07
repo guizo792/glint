@@ -1,4 +1,4 @@
-//! Offline calculator and unit conversion.
+//! Offline calculator, unit conversion, and currency conversion from a supplied rate table.
 
 /// Evaluate an arithmetic expression, or `None` if it is not one.
 pub fn eval(input: &str) -> Option<f64> {
@@ -201,6 +201,127 @@ impl Parser<'_> {
     }
 }
 
+/// Exchange rates: how many units of each currency equal one unit of `base`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rates {
+    pub base: String,
+    /// Publication date, `YYYY-MM-DD`.
+    pub date: String,
+    pub rates: std::collections::HashMap<String, f64>,
+}
+
+impl Rates {
+    /// Parse the JSON published by the rates service, rejecting anything implausible.
+    pub fn from_json(text: &str) -> Result<Rates, String> {
+        #[derive(serde::Deserialize)]
+        struct Wire {
+            base: String,
+            date: String,
+            rates: std::collections::HashMap<String, f64>,
+        }
+        let wire: Wire = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let code_ok = |c: &str| c.len() == 3 && c.bytes().all(|b| b.is_ascii_alphabetic());
+        if !code_ok(&wire.base) {
+            return Err("the base currency is not a 3-letter code".to_string());
+        }
+        if civil_days(&wire.date).is_none() {
+            return Err("the rates have no valid date".to_string());
+        }
+        if wire.rates.is_empty() {
+            return Err("the rate table is empty".to_string());
+        }
+        let mut rates = std::collections::HashMap::new();
+        for (code, rate) in wire.rates {
+            if !code_ok(&code) || !rate.is_finite() || rate <= 0.0 {
+                return Err(format!("the rate for {code} is not usable"));
+            }
+            rates.insert(code.to_uppercase(), rate);
+        }
+        let base = wire.base.to_uppercase();
+        rates.insert(base.clone(), 1.0);
+        Ok(Rates {
+            base,
+            date: wire.date,
+            rates,
+        })
+    }
+
+    /// Whole days from the rates' date to `today` (days since 1970-01-01).
+    pub fn age_days(&self, today: i64) -> Option<i64> {
+        civil_days(&self.date).map(|d| today - d)
+    }
+
+    pub fn convert(&self, amount: f64, from: &str, to: &str) -> Option<f64> {
+        let (from, to) = (self.rates.get(from)?, self.rates.get(to)?);
+        Some(amount / from * to)
+    }
+}
+
+/// Days since 1970-01-01 for a `YYYY-MM-DD` date.
+fn civil_days(date: &str) -> Option<i64> {
+    let mut parts = date.split('-');
+    let (y, m, d): (i64, i64, i64) = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    if parts.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// Days since 1970-01-01 right now, in UTC.
+pub fn today_days() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| (d.as_secs() / 86_400) as i64)
+}
+
+/// Convert text like `100 usd to eur`, `100usd in eur` or `$50 to eur`. Returns the amount and
+/// the target currency code.
+pub fn convert_currency(input: &str, rates: &Rates) -> Option<(f64, String)> {
+    let lower = input.trim().to_lowercase();
+    let (symbol, rest) = match lower.chars().next() {
+        Some('$') => (Some("USD"), &lower[1..]),
+        Some('€') => (Some("EUR"), &lower['€'.len_utf8()..]),
+        Some('£') => (Some("GBP"), &lower['£'.len_utf8()..]),
+        _ => (None, &lower[..]),
+    };
+    let mut words: Vec<&str> = rest.split_whitespace().collect();
+    // Allow `100usd to eur` as well as `100 usd to eur`.
+    let glued;
+    if symbol.is_none() && words.len() == 3 {
+        let at = words[0]
+            .find(|c: char| !c.is_ascii_digit() && c != '.' && c != ',')
+            .filter(|&i| i > 0)?;
+        glued = words[0].split_at(at);
+        words = vec![glued.0, glued.1, words[1], words[2]];
+    }
+    let (amount, from, joiner, to) = match (symbol, &words[..]) {
+        (Some(code), [a, j, t]) => (*a, code.to_string(), *j, *t),
+        (None, [a, f, j, t]) => (*a, f.to_uppercase(), *j, *t),
+        _ => return None,
+    };
+    if joiner != "to" && joiner != "in" {
+        return None;
+    }
+    let amount: f64 = amount.replace(',', "").parse().ok()?;
+    let to = to.to_uppercase();
+    let value = rates.convert(amount, &from, &to)?;
+    Some((value, to))
+}
+
+/// A money amount to two decimals.
+pub fn format_money(v: f64) -> String {
+    format!("{v:.2}")
+}
+
 /// Units as (name, group, factor to the group's base unit).
 const UNITS: &[(&str, &str, f64)] = &[
     ("mm", "length", 0.001),
@@ -364,6 +485,101 @@ mod tests {
         assert_eq!(convert("10 km to kg"), None);
         assert_eq!(convert("10 parsec to m"), None);
         assert_eq!(convert("report to boss"), None);
+    }
+
+    const RATES: &str = r#"{"amount":1.0,"base":"EUR","date":"2026-11-06",
+        "rates":{"USD":1.08,"GBP":0.83,"JPY":176.0}}"#;
+
+    #[test]
+    fn parses_the_rate_service_response_and_adds_the_base_currency() {
+        let rates = Rates::from_json(RATES).unwrap();
+        assert_eq!(rates.base, "EUR");
+        assert_eq!(rates.date, "2026-11-06");
+        assert_eq!(rates.rates["EUR"], 1.0);
+        assert_eq!(rates.rates["USD"], 1.08);
+    }
+
+    #[test]
+    fn rejects_implausible_rate_data() {
+        for bad in [
+            "{not json",
+            r#"{"base":"EUR","date":"2026-11-06","rates":{}}"#,
+            r#"{"base":"EUR","date":"soon","rates":{"USD":1.0}}"#,
+            r#"{"base":"EUR","date":"2026-13-40","rates":{"USD":1.0}}"#,
+            r#"{"base":"EURO","date":"2026-11-06","rates":{"USD":1.0}}"#,
+            r#"{"base":"EUR","date":"2026-11-06","rates":{"USD":0}}"#,
+            r#"{"base":"EUR","date":"2026-11-06","rates":{"USD":-2.5}}"#,
+            r#"{"base":"EUR","date":"2026-11-06","rates":{"US":1.2}}"#,
+        ] {
+            assert!(Rates::from_json(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn dates_count_days_correctly() {
+        assert_eq!(civil_days("1970-01-01"), Some(0));
+        assert_eq!(civil_days("2000-03-01"), Some(11_017));
+        assert_eq!(civil_days("2024-02-29"), Some(19_782));
+        let rates = Rates::from_json(RATES).unwrap();
+        assert_eq!(rates.age_days(civil_days("2026-11-10").unwrap()), Some(4));
+        assert!(today_days() > civil_days("2026-01-01").unwrap());
+    }
+
+    #[test]
+    fn converts_through_the_base_currency() {
+        let rates = Rates::from_json(RATES).unwrap();
+        let close = |got: Option<f64>, want: f64| assert!((got.unwrap() - want).abs() < 1e-9);
+        close(rates.convert(100.0, "EUR", "USD"), 108.0);
+        close(rates.convert(108.0, "USD", "EUR"), 100.0);
+        close(rates.convert(1.08, "USD", "GBP"), 0.83);
+        close(rates.convert(5.0, "JPY", "JPY"), 5.0);
+        assert_eq!(rates.convert(1.0, "USD", "XXX"), None);
+    }
+
+    #[test]
+    fn understands_the_ways_people_write_currency_questions() {
+        let rates = Rates::from_json(RATES).unwrap();
+        for input in [
+            "100 usd to eur",
+            "100 USD in EUR",
+            "100usd to eur",
+            "$100 to eur",
+            "  100 Usd To Eur ",
+        ] {
+            let (v, to) = convert_currency(input, &rates).unwrap_or_else(|| panic!("{input}"));
+            assert_eq!(to, "EUR", "{input}");
+            assert_eq!(format_money(v), "92.59", "{input}");
+        }
+        assert_eq!(
+            format_money(convert_currency("€10 to usd", &rates).unwrap().0),
+            "10.80"
+        );
+        assert_eq!(
+            format_money(convert_currency("£1 to eur", &rates).unwrap().0),
+            "1.20"
+        );
+        assert_eq!(
+            format_money(convert_currency("1,000 usd to eur", &rates).unwrap().0),
+            "925.93"
+        );
+    }
+
+    #[test]
+    fn leaves_other_text_alone() {
+        let rates = Rates::from_json(RATES).unwrap();
+        for input in [
+            "100 usd",
+            "100 usd to",
+            "usd to eur",
+            "100 usd to xyz",
+            "100 abc to eur",
+            "report to boss",
+            "10 km to mi",
+            "to eur",
+            "",
+        ] {
+            assert_eq!(convert_currency(input, &rates), None, "{input}");
+        }
     }
 
     #[test]

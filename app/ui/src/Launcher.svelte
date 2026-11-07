@@ -206,7 +206,7 @@
   }
 
   const glyphs: Record<string, string> = {
-    command: "⚡", setting: "⚙", window: "▣", clipboard: "📋", calc: "=", web: "🌐", extension: "✦",
+    command: "⚡", setting: "⚙", window: "▣", clipboard: "📋", calc: "=", web: "🌐", extension: "✦", content: "🔎",
   };
 
   async function loadSettings() {

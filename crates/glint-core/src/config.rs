@@ -37,6 +37,9 @@ pub struct Config {
     pub rebuild_hours: u64,
     /// Keep recent copied text in memory. Off unless the user turns it on.
     pub clipboard_history: bool,
+    /// Download exchange rates about once a day so `100 usd to eur` works. Off by default,
+    /// because it is the only thing in Glint that uses the network.
+    pub currency_rates: bool,
     /// Extension folder names the user has allowed to run.
     pub enabled_extensions: Vec<String>,
     pub bangs: Vec<Bang>,
@@ -61,6 +64,7 @@ impl Default for Config {
             extra_excludes: Vec::new(),
             rebuild_hours: 6,
             clipboard_history: false,
+            currency_rates: false,
             enabled_extensions: Vec::new(),
             bangs: vec![
                 bang("g", "Google", "https://www.google.com/search?q={q}"),
@@ -143,8 +147,9 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_history_is_off_by_default() {
+    fn clipboard_history_and_exchange_rates_are_off_by_default() {
         assert!(!Config::default().clipboard_history);
+        assert!(!Config::default().currency_rates);
     }
 
     #[test]

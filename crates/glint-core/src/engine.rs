@@ -33,6 +33,7 @@ pub enum ItemKind {
     Calc,
     Web,
     Extension,
+    Content,
 }
 
 /// What happens when a result is opened.
@@ -128,7 +129,8 @@ pub fn actions_for(kind: ItemKind) -> Vec<&'static str> {
         | ItemKind::Clipboard
         | ItemKind::Calc
         | ItemKind::Web
-        | ItemKind::Extension => vec!["open"],
+        | ItemKind::Extension
+        | ItemKind::Content => vec!["open"],
     }
 }
 
@@ -376,8 +378,39 @@ impl Provider for ClipboardHistory {
     }
 }
 
-/// Calculator and unit conversion.
-pub struct Calculator;
+/// Calculator, unit conversion and, when rates are supplied, currency conversion.
+#[derive(Default)]
+pub struct Calculator {
+    /// Exchange rates, filled in by the app only when the user has turned them on.
+    pub rates: Arc<RwLock<Option<calc::Rates>>>,
+}
+
+impl Calculator {
+    /// `(result, subtitle)` for the text, if it is a calculation or conversion.
+    fn answer(&self, text: &str, explicit: bool) -> Option<(String, String)> {
+        let copy_hint = |text: &str| format!("{text} (press Enter to copy)");
+        if let Some((v, unit)) = calc::convert(text) {
+            return Some((
+                format!("{} {unit}", calc::format_number(v)),
+                copy_hint(text),
+            ));
+        }
+        if let Some(rates) = self.rates.read().unwrap().as_ref() {
+            if let Some((v, code)) = calc::convert_currency(text, rates) {
+                let age = rates.age_days(calc::today_days()).filter(|d| *d > 5);
+                let note = match age {
+                    Some(d) => format!("ECB rates from {}, {d} days old", rates.date),
+                    None => format!("ECB rates from {}", rates.date),
+                };
+                return Some((format!("{} {code}", calc::format_money(v)), note));
+            }
+        }
+        (explicit || calc::looks_like_math(text))
+            .then(|| calc::eval(text).map(calc::format_number))
+            .flatten()
+            .map(|result| (result, copy_hint(text)))
+    }
+}
 
 impl Provider for Calculator {
     fn query(&self, q: &Query, _limit: usize, fuzzy: bool) -> Vec<Item> {
@@ -385,27 +418,36 @@ impl Provider for Calculator {
         if fuzzy || !(explicit || q.mode == Mode::All) {
             return Vec::new();
         }
-        let text = q.text.trim();
-        let converted =
-            calc::convert(text).map(|(v, unit)| format!("{} {unit}", calc::format_number(v)));
-        let computed = || {
-            (explicit || calc::looks_like_math(text))
-                .then(|| calc::eval(text).map(calc::format_number))
-                .flatten()
-        };
-        let Some(result) = converted.or_else(computed) else {
+        let Some((result, subtitle)) = self.answer(q.text.trim(), explicit) else {
             return Vec::new();
         };
         let mut item = Item::new(
             "calc".to_string(),
             result.clone(),
-            format!("{text} (press Enter to copy)"),
+            subtitle,
             ItemKind::Calc,
             Target::Copy(result),
         );
         item.score = TOP_SCORE;
         vec![item]
     }
+}
+
+/// A last row that opens Windows' own content search for the text. Glint indexes names only,
+/// so this hands the question to the Windows Search index, which also reads file contents.
+pub fn content_search_item(text: &str) -> Item {
+    let phrase = if text.contains(char::is_whitespace) {
+        format!("content:\"{text}\"")
+    } else {
+        format!("content:{text}")
+    };
+    Item::new(
+        format!("content:{text}"),
+        format!("Search file contents for {text}"),
+        "Opens Windows search in its indexed locations".to_string(),
+        ItemKind::Content,
+        Target::Url(format!("search-ms:query={}", url_encode(&phrase))),
+    )
 }
 
 /// Encode text for use in a URL.
@@ -597,6 +639,12 @@ impl Engine {
             if items.is_empty() && plain && !q.text.is_empty() {
                 items.extend(self.web.fallback(&q.text));
             }
+            // Always last, and not for answers such as a calculation.
+            let text = q.text.trim();
+            if plain && text.chars().count() >= 3 && items.iter().all(|i| i.kind != ItemKind::Calc)
+            {
+                items.push(content_search_item(text));
+            }
             items
         };
         drop(history);
@@ -641,6 +689,7 @@ impl Engine {
                 | ItemKind::Calc
                 | ItemKind::Web
                 | ItemKind::Extension
+                | ItemKind::Content
         ) {
             return;
         }
@@ -667,6 +716,7 @@ mod tests {
         tree: PathBuf,
         apps: Arc<Apps>,
         clips: Arc<ClipboardHistory>,
+        rates: Arc<RwLock<Option<calc::Rates>>>,
     }
 
     fn fixture(tag: &str) -> Fixture {
@@ -710,6 +760,8 @@ mod tests {
             }],
         });
         let windows = Arc::new(Windows(Box::new(|| vec![(7, "Inbox - Mail".to_string())])));
+        let calculator = Arc::new(Calculator::default());
+        let rates = calculator.rates.clone();
         let engine = Engine::new(
             vec![
                 Arc::new(Files(live)),
@@ -717,7 +769,7 @@ mod tests {
                 commands,
                 windows,
                 clips.clone(),
-                Arc::new(Calculator),
+                calculator,
                 web.clone(),
             ],
             web,
@@ -728,11 +780,131 @@ mod tests {
             tree,
             apps,
             clips,
+            rates,
         }
     }
 
+    /// Result titles, without the always-present content search row.
     fn titles(items: &[Item]) -> Vec<&str> {
-        items.iter().map(|i| i.title.as_str()).collect()
+        items
+            .iter()
+            .filter(|i| i.kind != ItemKind::Content)
+            .map(|i| i.title.as_str())
+            .collect()
+    }
+
+    // A fixed old date, so the staleness note does not depend on today.
+    const RATES: &str = r#"{"base":"EUR","date":"2020-01-01","rates":{"USD":1.08,"GBP":0.83}}"#;
+
+    #[test]
+    fn currency_conversion_needs_rates_and_says_where_they_come_from() {
+        let f = fixture("currency");
+        // Off by default: no rates, so it is just a search.
+        let items = f.engine.search("100 usd to eur", 10, false, 0);
+        assert!(items.iter().all(|i| i.kind != ItemKind::Calc));
+        *f.rates.write().unwrap() = Some(calc::Rates::from_json(RATES).unwrap());
+        let items = f.engine.search("100 usd to eur", 10, false, 0);
+        assert_eq!(items[0].title, "92.59 EUR");
+        assert_eq!(items[0].target, Target::Copy("92.59 EUR".to_string()));
+        assert!(items[0].subtitle.contains("ECB rates from 2020-01-01"));
+        assert!(
+            items[0].subtitle.contains("days old"),
+            "{}",
+            items[0].subtitle
+        );
+        assert_eq!(
+            f.engine.search("$5 to gbp", 10, true, 0)[0].title,
+            "3.84 GBP"
+        );
+        // Units still win for unit questions, and plain searches are unaffected.
+        assert_eq!(
+            f.engine.search("1 km to m", 10, false, 0)[0].title,
+            "1000 m"
+        );
+        assert!(f
+            .engine
+            .search("usd", 10, false, 0)
+            .iter()
+            .all(|i| i.kind != ItemKind::Calc));
+    }
+
+    #[test]
+    fn fresh_rates_carry_no_age_warning() {
+        let f = fixture("fresh");
+        let today = calc::today_days();
+        let (y, m, d) = {
+            // Rebuild a YYYY-MM-DD string for today from the day count.
+            let z = today + 719_468;
+            let era = z.div_euclid(146_097);
+            let doe = z - era * 146_097;
+            let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            let mp = (5 * doy + 2) / 153;
+            let d = doy - (153 * mp + 2) / 5 + 1;
+            let m = if mp < 10 { mp + 3 } else { mp - 9 };
+            (yoe + era * 400 + i64::from(m <= 2), m, d)
+        };
+        let json =
+            format!(r#"{{"base":"EUR","date":"{y:04}-{m:02}-{d:02}","rates":{{"USD":1.08}}}}"#);
+        *f.rates.write().unwrap() = Some(calc::Rates::from_json(&json).unwrap());
+        let item = f.engine.search("10 eur to usd", 10, false, 0).remove(0);
+        assert_eq!(item.title, "10.80 USD");
+        assert!(!item.subtitle.contains("days old"), "{}", item.subtitle);
+    }
+
+    #[test]
+    fn a_last_row_hands_content_search_to_windows() {
+        let f = fixture("content");
+        let items = f.engine.search("terminal", 10, false, 0);
+        let last = items.last().unwrap();
+        assert_eq!(last.kind, ItemKind::Content);
+        assert_eq!(last.title, "Search file contents for terminal");
+        assert_eq!(
+            last.target,
+            Target::Url("search-ms:query=content%3Aterminal".to_string())
+        );
+        assert_eq!(
+            items.iter().filter(|i| i.kind == ItemKind::Content).count(),
+            1
+        );
+        // More than one word is quoted so it is searched as a phrase.
+        let phrase = f
+            .engine
+            .search("annual report", 10, false, 0)
+            .pop()
+            .unwrap();
+        assert_eq!(
+            phrase.target,
+            Target::Url("search-ms:query=content%3A%22annual%20report%22".to_string())
+        );
+    }
+
+    #[test]
+    fn the_content_row_stays_out_of_the_way() {
+        let f = fixture("content-quiet");
+        let has = |q: &str| {
+            f.engine
+                .search(q, 10, false, 0)
+                .iter()
+                .any(|i| i.kind == ItemKind::Content)
+        };
+        assert!(!has("te"), "too short to be worth it");
+        assert!(!has(""));
+        assert!(!has("2+2*3"), "a calculation is already answered");
+        assert!(!has("report ext:pdf"), "filters mean the user wants names");
+        assert!(!has("> lock"));
+        assert!(has("qqqqzzzz"), "still offered when nothing matches");
+        let nothing = f.engine.search("qqqqzzzz", 10, false, 0);
+        assert_eq!(nothing[0].kind, ItemKind::Web);
+        assert_eq!(nothing[1].kind, ItemKind::Content);
+    }
+
+    #[test]
+    fn the_content_row_is_not_remembered() {
+        let f = fixture("content-history");
+        let row = f.engine.search("terminal", 10, false, 0).pop().unwrap();
+        f.engine.record_open("terminal", &row, 0);
+        assert!(f.engine.history.lock().unwrap().items.is_empty());
     }
 
     #[test]

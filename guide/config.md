@@ -16,6 +16,7 @@ Every setting is optional.
 | `extra_excludes` | `[]` | Folder names to skip, added to the built-in list. Applies after restart. |
 | `rebuild_hours` | `6` | Hours between full rebuilds. New files appear sooner through file watching. |
 | `clipboard_history` | `false` | Keep copied text in memory |
+| `currency_rates` | `false` | Download European Central Bank exchange rates about once a day so `100 usd to eur` works. The only network use in Glint. Turning it off stops downloads and deletes the saved rates. |
 | `enabled_extensions` | `[]` | Installed extensions allowed to run, by folder name |
 
 ## Web search and links
@@ -55,4 +56,5 @@ Also available: `--bg-raised`, `--text`, `--text-dim`, `--border`, `--danger`.
 | `%LOCALAPPDATA%\Glint\index` | File name index. Safe to delete; it is rebuilt. |
 | `%LOCALAPPDATA%\Glint\history.json` | What you opened, pins and hidden results |
 | `%LOCALAPPDATA%\Glint\icons` | Icon cache. Safe to delete. |
+| `%LOCALAPPDATA%\Glint\rates.json` | Saved exchange rates, only if turned on. Safe to delete. |
 | `%LOCALAPPDATA%\Glint\logs` | Logs. They contain no file paths you searched for. |
