@@ -1,10 +1,8 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod catalog;
-mod rates;
 
 use base64::Engine as _;
-use glint_core::calc::Rates;
 use glint_core::config::Config;
 use glint_core::engine::{
     Apps, Calculator, ClipboardHistory, Commands, Engine, Files, Item, ItemList, Target, Web,
@@ -40,10 +38,6 @@ const INDEX_CHECK: Duration = Duration::from_secs(5);
 const MIN_FORCED_REBUILD_GAP: Duration = Duration::from_secs(600);
 /// Do not rebuild at startup if the snapshot is newer than this.
 const FRESH_SNAPSHOT: Duration = Duration::from_secs(3600);
-/// Download rates again once the saved ones are older than this, and wait this long to retry
-/// after a failure.
-const RATES_MAX_AGE: Duration = Duration::from_secs(24 * 3600);
-const RATES_RETRY: Duration = Duration::from_secs(6 * 3600);
 const STARTUP_DELAY: Duration = Duration::from_secs(10);
 
 struct Paths {
@@ -76,9 +70,6 @@ impl Paths {
     }
     fn history(&self) -> PathBuf {
         self.data_dir.join("history.json")
-    }
-    fn rates(&self) -> PathBuf {
-        self.data_dir.join("rates.json")
     }
     fn icons(&self) -> PathBuf {
         self.data_dir.join("icons")
@@ -126,7 +117,6 @@ struct State {
     apps: Arc<Apps>,
     clips: Arc<ClipboardHistory>,
     extensions: Arc<Host>,
-    rates: Arc<RwLock<Option<Rates>>>,
     clip_monitor: Mutex<Option<clipboard::Monitor>>,
     walk: WalkConfig,
     rebuild_requested: std::sync::atomic::AtomicBool,
@@ -143,7 +133,6 @@ fn build_engine(
     apps: &Arc<Apps>,
     clips: &Arc<ClipboardHistory>,
     extensions: &Arc<Host>,
-    rates: &Arc<RwLock<Option<Rates>>>,
 ) -> Arc<Engine> {
     let web = Arc::new(Web {
         bangs: config.bangs.clone(),
@@ -163,9 +152,7 @@ fn build_engine(
             Arc::new(Commands(ItemList::new(catalog::items()))),
             Arc::new(windows),
             clips.clone(),
-            Arc::new(Calculator {
-                rates: rates.clone(),
-            }),
+            Arc::new(Calculator),
             web.clone(),
             extensions.clone(),
         ],
@@ -188,7 +175,6 @@ fn apply_config(app: &AppHandle, state: &State) {
         &state.apps,
         &state.clips,
         &state.extensions,
-        &state.rates,
     );
     state.extensions.set_enabled(&config.enabled_extensions);
     register_hotkey(app, state, &config.hotkey);
@@ -737,41 +723,6 @@ fn index_loop(app: AppHandle) {
     }
 }
 
-/// Keep exchange rates current, but only while the user has them turned on. Turning them off
-/// stops downloads and deletes the saved copy.
-fn rates_loop(app: AppHandle) {
-    let state = app.state::<State>();
-    let path = state.paths.rates();
-    let mut last_attempt: Option<SystemTime> = None;
-    loop {
-        if state.config.read().unwrap().currency_rates {
-            if state.rates.read().unwrap().is_none() {
-                *state.rates.write().unwrap() = rates::load(&path);
-            }
-            let old_enough = config_stamp(&path)
-                .and_then(|t| t.elapsed().ok())
-                .is_none_or(|age| age > RATES_MAX_AGE);
-            let may_retry = last_attempt.is_none_or(|t| t.elapsed().is_ok_and(|e| e > RATES_RETRY));
-            if old_enough && may_retry {
-                last_attempt = Some(SystemTime::now());
-                match rates::fetch(&path) {
-                    Ok(fresh) => {
-                        *state.rates.write().unwrap() = Some(fresh);
-                        log(&state.paths, "rates: updated");
-                    }
-                    Err(e) => log(&state.paths, &format!("rates: {e}")),
-                }
-            }
-        } else {
-            last_attempt = None;
-            if state.rates.write().unwrap().take().is_some() || path.exists() {
-                let _ = std::fs::remove_file(&path);
-            }
-        }
-        std::thread::sleep(Duration::from_secs(10));
-    }
-}
-
 fn apps_loop(state: Arc<Apps>) {
     glint_win::init_com();
     loop {
@@ -875,16 +826,7 @@ fn main() {
     let apps_provider = Arc::new(Apps::default());
     let clips = Arc::new(ClipboardHistory::default());
     let extensions = Arc::new(Host::new(paths.extensions(), &config.enabled_extensions));
-    let rates: Arc<RwLock<Option<Rates>>> = Arc::default();
-    let engine = build_engine(
-        &paths,
-        &config,
-        &live,
-        &apps_provider,
-        &clips,
-        &extensions,
-        &rates,
-    );
+    let engine = build_engine(&paths, &config, &live, &apps_provider, &clips, &extensions);
     let stamp = config_stamp(&paths.config());
 
     let state = State {
@@ -898,7 +840,6 @@ fn main() {
         apps: apps_provider.clone(),
         clips,
         extensions,
-        rates,
         clip_monitor: Mutex::new(None),
         walk: walk.clone(),
         rebuild_requested: false.into(),
@@ -959,8 +900,6 @@ fn main() {
             let indexer = handle.clone();
             std::thread::spawn(move || index_loop(indexer));
             std::thread::spawn(move || apps_loop(apps_provider));
-            let rates_app = handle.clone();
-            std::thread::spawn(move || rates_loop(rates_app));
             if first_run {
                 open_settings_window(&handle, "welcome");
             }

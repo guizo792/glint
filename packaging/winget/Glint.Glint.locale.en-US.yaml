@@ -8,7 +8,7 @@ PackageUrl: https://github.com/OWNER/REPO
 License: MIT OR Apache-2.0
 LicenseUrl: https://github.com/OWNER/REPO/blob/main/LICENSE-MIT
 ShortDescription: A fast keyboard launcher for Windows
-Description: Press a hotkey, type a few letters, press Enter. Finds apps, files, folders, settings pages and open windows anywhere on your PC, learns what you pick, and makes no network connections unless you turn on exchange rates.
+Description: Press a hotkey, type a few letters, press Enter. Finds apps, files, folders, settings pages and open windows anywhere on your PC, learns what you pick, and makes no network connections.
 Moniker: glint
 Tags:
   - launcher

@@ -26,7 +26,6 @@ export interface Config {
   extra_excludes: string[];
   rebuild_hours: number;
   clipboard_history: boolean;
-  currency_rates: boolean;
   enabled_extensions: string[];
   bangs: { key: string; name: string; url: string }[];
   quicklinks: { name: string; url: string }[];

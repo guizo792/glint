@@ -164,8 +164,6 @@
         <h2>{t("privacy")}</h2>
         <label class="row"><input type="checkbox" bind:checked={config.clipboard_history} /> {t("clipboard")}</label>
         <small>{t("clipboardHint")}</small>
-        <label class="row"><input type="checkbox" bind:checked={config.currency_rates} /> {t("currency")}</label>
-        <small>{t("currencyHint")}</small>
         <div class="buttons">
           <button onclick={() => api.clearClipboardHistory()}>{t("clearClipboard")}</button>
           <button onclick={() => api.clearHistory()}>{t("clearHistory")}</button>

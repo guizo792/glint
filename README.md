@@ -38,7 +38,6 @@ What you can type:
 | `report ext:pdf` | Only PDFs. Also `in:Documents`, `file:`, `dir:`, `app:` |
 | `12*12`, `= 2024/3` | Calculator; Enter copies the answer |
 | `10 km to mi`, `100 f to c` | Unit conversion |
-| `100 usd to eur`, `$50 to gbp` | Currency conversion, if you turn on exchange rates in Settings |
 | `> ` | System commands and settings pages |
 | `w chrome` | Switch to an open window |
 | `c token` | Clipboard history, if you turned it on |
@@ -56,7 +55,7 @@ Glint indexes every fixed drive by name. Most folders are searched as normal; sy
 
 ## Privacy
 
-Glint makes no network connections of its own, with one opt-in exception: if you turn on exchange rates in Settings, it downloads European Central Bank rates from api.frankfurter.dev about once a day. The request carries nothing you typed. Web results only open your browser when you choose them. Clipboard history is off by default, stays in memory, and skips text that password managers mark as private. Usage history is a local file you can clear in Settings.
+Glint makes no network connections of its own. Web results only open your browser when you choose them. Clipboard history is off by default, stays in memory, and skips text that password managers mark as private. Usage history is a local file you can clear in Settings.
 
 Extensions are the exception to all of this: they are programs running with your user rights. See [guide/extensions.md](guide/extensions.md).
 

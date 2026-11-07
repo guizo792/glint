@@ -378,39 +378,8 @@ impl Provider for ClipboardHistory {
     }
 }
 
-/// Calculator, unit conversion and, when rates are supplied, currency conversion.
-#[derive(Default)]
-pub struct Calculator {
-    /// Exchange rates, filled in by the app only when the user has turned them on.
-    pub rates: Arc<RwLock<Option<calc::Rates>>>,
-}
-
-impl Calculator {
-    /// `(result, subtitle)` for the text, if it is a calculation or conversion.
-    fn answer(&self, text: &str, explicit: bool) -> Option<(String, String)> {
-        let copy_hint = |text: &str| format!("{text} (press Enter to copy)");
-        if let Some((v, unit)) = calc::convert(text) {
-            return Some((
-                format!("{} {unit}", calc::format_number(v)),
-                copy_hint(text),
-            ));
-        }
-        if let Some(rates) = self.rates.read().unwrap().as_ref() {
-            if let Some((v, code)) = calc::convert_currency(text, rates) {
-                let age = rates.age_days(calc::today_days()).filter(|d| *d > 5);
-                let note = match age {
-                    Some(d) => format!("ECB rates from {}, {d} days old", rates.date),
-                    None => format!("ECB rates from {}", rates.date),
-                };
-                return Some((format!("{} {code}", calc::format_money(v)), note));
-            }
-        }
-        (explicit || calc::looks_like_math(text))
-            .then(|| calc::eval(text).map(calc::format_number))
-            .flatten()
-            .map(|result| (result, copy_hint(text)))
-    }
-}
+/// Calculator and unit conversion.
+pub struct Calculator;
 
 impl Provider for Calculator {
     fn query(&self, q: &Query, _limit: usize, fuzzy: bool) -> Vec<Item> {
@@ -418,13 +387,21 @@ impl Provider for Calculator {
         if fuzzy || !(explicit || q.mode == Mode::All) {
             return Vec::new();
         }
-        let Some((result, subtitle)) = self.answer(q.text.trim(), explicit) else {
+        let text = q.text.trim();
+        let converted =
+            calc::convert(text).map(|(v, unit)| format!("{} {unit}", calc::format_number(v)));
+        let computed = || {
+            (explicit || calc::looks_like_math(text))
+                .then(|| calc::eval(text).map(calc::format_number))
+                .flatten()
+        };
+        let Some(result) = converted.or_else(computed) else {
             return Vec::new();
         };
         let mut item = Item::new(
             "calc".to_string(),
             result.clone(),
-            subtitle,
+            format!("{text} (press Enter to copy)"),
             ItemKind::Calc,
             Target::Copy(result),
         );
@@ -716,7 +693,6 @@ mod tests {
         tree: PathBuf,
         apps: Arc<Apps>,
         clips: Arc<ClipboardHistory>,
-        rates: Arc<RwLock<Option<calc::Rates>>>,
     }
 
     fn fixture(tag: &str) -> Fixture {
@@ -760,8 +736,6 @@ mod tests {
             }],
         });
         let windows = Arc::new(Windows(Box::new(|| vec![(7, "Inbox - Mail".to_string())])));
-        let calculator = Arc::new(Calculator::default());
-        let rates = calculator.rates.clone();
         let engine = Engine::new(
             vec![
                 Arc::new(Files(live)),
@@ -769,7 +743,7 @@ mod tests {
                 commands,
                 windows,
                 clips.clone(),
-                calculator,
+                Arc::new(Calculator),
                 web.clone(),
             ],
             web,
@@ -780,7 +754,6 @@ mod tests {
             tree,
             apps,
             clips,
-            rates,
         }
     }
 
@@ -791,65 +764,6 @@ mod tests {
             .filter(|i| i.kind != ItemKind::Content)
             .map(|i| i.title.as_str())
             .collect()
-    }
-
-    // A fixed old date, so the staleness note does not depend on today.
-    const RATES: &str = r#"{"base":"EUR","date":"2020-01-01","rates":{"USD":1.08,"GBP":0.83}}"#;
-
-    #[test]
-    fn currency_conversion_needs_rates_and_says_where_they_come_from() {
-        let f = fixture("currency");
-        // Off by default: no rates, so it is just a search.
-        let items = f.engine.search("100 usd to eur", 10, false, 0);
-        assert!(items.iter().all(|i| i.kind != ItemKind::Calc));
-        *f.rates.write().unwrap() = Some(calc::Rates::from_json(RATES).unwrap());
-        let items = f.engine.search("100 usd to eur", 10, false, 0);
-        assert_eq!(items[0].title, "92.59 EUR");
-        assert_eq!(items[0].target, Target::Copy("92.59 EUR".to_string()));
-        assert!(items[0].subtitle.contains("ECB rates from 2020-01-01"));
-        assert!(
-            items[0].subtitle.contains("days old"),
-            "{}",
-            items[0].subtitle
-        );
-        assert_eq!(
-            f.engine.search("$5 to gbp", 10, true, 0)[0].title,
-            "3.84 GBP"
-        );
-        // Units still win for unit questions, and plain searches are unaffected.
-        assert_eq!(
-            f.engine.search("1 km to m", 10, false, 0)[0].title,
-            "1000 m"
-        );
-        assert!(f
-            .engine
-            .search("usd", 10, false, 0)
-            .iter()
-            .all(|i| i.kind != ItemKind::Calc));
-    }
-
-    #[test]
-    fn fresh_rates_carry_no_age_warning() {
-        let f = fixture("fresh");
-        let today = calc::today_days();
-        let (y, m, d) = {
-            // Rebuild a YYYY-MM-DD string for today from the day count.
-            let z = today + 719_468;
-            let era = z.div_euclid(146_097);
-            let doe = z - era * 146_097;
-            let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-            let mp = (5 * doy + 2) / 153;
-            let d = doy - (153 * mp + 2) / 5 + 1;
-            let m = if mp < 10 { mp + 3 } else { mp - 9 };
-            (yoe + era * 400 + i64::from(m <= 2), m, d)
-        };
-        let json =
-            format!(r#"{{"base":"EUR","date":"{y:04}-{m:02}-{d:02}","rates":{{"USD":1.08}}}}"#);
-        *f.rates.write().unwrap() = Some(calc::Rates::from_json(&json).unwrap());
-        let item = f.engine.search("10 eur to usd", 10, false, 0).remove(0);
-        assert_eq!(item.title, "10.80 USD");
-        assert!(!item.subtitle.contains("days old"), "{}", item.subtitle);
     }
 
     #[test]
