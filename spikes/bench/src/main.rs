@@ -1,5 +1,5 @@
 //! Search benchmark. Usage:
-//!   bench [N] [--real [ROOT]] [--gate MS]
+//!   bench [N] [--real [ROOT]] [--gate MS] [--min-speedup X]
 //! Run with RAYON_NUM_THREADS=4 to model a mid-range machine. With --gate, exits 1 if any
 //! fast-path query exceeds MS at p95.
 use glint_core::store::{refresh_in_background, Store};
@@ -45,6 +45,9 @@ fn main() {
         .first()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1_000_000);
+    let min_speedup: Option<f64> = flag("--min-speedup")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok());
     let gate: Option<f64> = flag("--gate")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok());
@@ -163,6 +166,8 @@ fn main() {
 
     println!("\nquery           fast p50 / p95 ms   hits    brute-force p50 / p95 ms");
     let mut worst: f64 = 0.0;
+    // Totals over queries of 3 or more characters, for the machine-independent speed check.
+    let (mut fast_total, mut full_total) = (0.0_f64, 0.0_f64);
     let skip = flag("--no-queries").is_some();
     for q in [
         "r",
@@ -186,9 +191,19 @@ fn main() {
             time(|| ix.search_fuzzy(q, 20).len(), 10)
         };
         worst = worst.max(p95);
+        if q.chars().count() >= 3 {
+            fast_total += p95;
+            full_total += b95;
+        }
         println!("{q:<14} {p50:8.1} / {p95:6.1}   {hits:>4}    {b50:8.1} / {b95:6.1}");
     }
     println!("\nworst fast-path p95: {worst:.1} ms");
+    if fast_total > 0.0 && full_total > 0.0 {
+        println!(
+            "fast path vs full scan, queries of 3+ characters: {:.1}x faster",
+            full_total / fast_total
+        );
+    }
     if let Some(secs) = flag("--hold")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse::<u64>().ok())
@@ -198,6 +213,21 @@ fn main() {
             std::process::id()
         );
         std::thread::sleep(std::time::Duration::from_secs(secs));
+    }
+    if let Some(min) = min_speedup {
+        // Wall-clock limits depend on the machine; this compares two things measured together.
+        if fast_total <= 0.0 || full_total <= 0.0 {
+            eprintln!("--min-speedup needs the full-scan timings (do not use --no-brute)");
+            std::process::exit(2);
+        }
+        let speedup = full_total / fast_total;
+        if speedup < min {
+            eprintln!(
+                "SPEED CHECK FAILED: only {speedup:.1}x faster than the full scan, need {min}x"
+            );
+            std::process::exit(1);
+        }
+        println!("speed check ok ({speedup:.1}x >= {min}x)");
     }
     if let Some(limit) = gate {
         if worst > limit {

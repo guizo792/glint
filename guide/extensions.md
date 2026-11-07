@@ -10,7 +10,7 @@ What Glint does enforce:
 
 - An extension only receives the text typed after its own trigger word, never your other searches.
 - It can only ask Glint to copy text or open links if its manifest declares `clipboard` or `open_url`. Links must be `http` or `https`.
-- One that hangs is killed: 800 ms to answer a search, 5 s to run an action. Crashes and bad output cannot affect Glint. After 3 failures in a row it stays stopped until you press Reload in Settings.
+- One that hangs is killed: 800 ms to answer a search (5 s for the first answer after it starts, because the program has to launch), 5 s to run an action. Crashes and bad output cannot affect Glint. After 3 failures in a row it stays stopped until you press Reload in Settings.
 
 Other permission names, such as `network` or `filesystem`, are shown to you as the author's statement of what it does. They are not enforced.
 
@@ -49,7 +49,7 @@ Line-delimited JSON-RPC 2.0. Flush after each line. Reply with the same `id`.
 
 ### query
 
-Sent as the user types. Answer quickly: results that take over 800 ms stop the extension.
+Sent as the user types. Answer quickly: answers that take over 800 ms stop the extension. The first answer after the program starts gets 5 s.
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"query","params":{"text":"some text"}}

@@ -44,6 +44,12 @@ If you touched search, also run the speed gate. It models a mid-range machine an
 RAYON_NUM_THREADS=4 cargo run --release -p bench -- --gate 33
 ```
 
+CI runs a version that does not depend on the machine, because shared runners are slower than a developer machine: across queries of 3 or more characters, the fast path must be at least 3 times faster than the full scan, measured in the same run.
+
+```bash
+cargo run --release -p bench -- --min-speedup 3
+```
+
 If you touched the window or hotkey, run `scripts/e2e.ps1` on an unlocked desktop. It takes over the keyboard briefly.
 
 ## Principles

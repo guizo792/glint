@@ -31,8 +31,8 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      - name: Search speed gate
-        run: cargo run --release -p bench -- --gate 33
+      - name: Search speed check
+        run: cargo run --release -p bench -- --min-speedup 3
         env:
           RAYON_NUM_THREADS: 4
       - name: Dependency audit

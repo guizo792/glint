@@ -20,6 +20,9 @@ use std::time::{Duration, Instant};
 
 const QUERY_TIMEOUT: Duration = Duration::from_millis(800);
 const RUN_TIMEOUT: Duration = Duration::from_secs(5);
+/// The first answer after a start includes launching the program, which can take well over the
+/// normal limit on a cold or busy machine (a Node script took more than 800 ms on a CI runner).
+const STARTUP_ALLOWANCE: Duration = Duration::from_secs(5);
 const MAX_LINE: u64 = 1024 * 1024;
 const MAX_ITEMS: usize = 50;
 /// Failures in a row before an extension is left stopped until reload.
@@ -172,7 +175,9 @@ impl Extension {
         if slot.failures >= MAX_FAILURES {
             return Err(slot.error.clone().unwrap_or_else(|| "stopped".to_string()));
         }
+        let mut timeout = timeout;
         if slot.running.is_none() {
+            timeout = timeout.max(STARTUP_ALLOWANCE);
             match self.spawn() {
                 Ok(running) => slot.running = Some(running),
                 Err(e) => return Err(fail(&mut slot, e)),
@@ -581,12 +586,29 @@ for line in sys.stdin:
         let (dir, host) = host("hang", &[]);
         let start = Instant::now();
         assert!(titles(&host, "echo hang").is_empty());
+        // The first call after a start waits out the startup allowance before giving up.
         assert!(
-            start.elapsed() < Duration::from_secs(3),
+            start.elapsed() < STARTUP_ALLOWANCE + Duration::from_secs(3),
             "{:?}",
             start.elapsed()
         );
         assert_eq!(titles(&host, "echo fine"), ["Echo fine"]);
+        finish(dir, host);
+    }
+
+    #[test]
+    fn a_slow_starting_extension_gets_time_to_answer_its_first_request() {
+        let (dir, host) = host("slow-start", &[]);
+        // Takes longer to start than the normal query limit, then behaves normally.
+        let script = format!(
+            "import time\ntime.sleep(1.5)\n{}",
+            fs::read_to_string(dir.join("demo").join("main.py")).unwrap()
+        );
+        fs::write(dir.join("demo").join("main.py"), script).unwrap();
+        host.reload();
+        assert_eq!(titles(&host, "echo first"), ["Echo first"]);
+        assert_eq!(titles(&host, "echo second"), ["Echo second"]);
+        assert!(host.list()[0].error.is_none());
         finish(dir, host);
     }
 
