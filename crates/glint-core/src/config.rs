@@ -56,7 +56,7 @@ impl Default for Config {
             theme: "system".to_string(),
             language: "en".to_string(),
             max_results: 20,
-            remember_query_secs: 0,
+            remember_query_secs: 3,
             extra_roots: Vec::new(),
             extra_excludes: Vec::new(),
             rebuild_hours: 6,
@@ -140,6 +140,12 @@ mod tests {
         let c = Config::parse("hotkey = \"Ctrl+Alt+K\"").unwrap();
         assert_eq!(c.hotkey, "Ctrl+Alt+K");
         assert_eq!(c.max_results, 20);
+    }
+
+    #[test]
+    fn a_closed_search_is_remembered_for_three_seconds_by_default() {
+        assert_eq!(Config::default().remember_query_secs, 3);
+        assert_eq!(Config::parse("").unwrap().remember_query_secs, 3);
     }
 
     #[test]

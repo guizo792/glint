@@ -249,6 +249,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="launcher" onkeydown={onKeydown}>
+  <div class="bar">
   <input
     bind:this={input}
     bind:value={query}
@@ -266,6 +267,15 @@
     autocapitalize="off"
     autocorrect="off"
   />
+  <button
+    class="gear"
+    type="button"
+    tabindex="-1"
+    aria-label={t("settingsShort")}
+    title={`${t("settingsShort")} (Ctrl+,)`}
+    onclick={() => api.openSettings()}>⚙</button
+  >
+  </div>
 
   {#if menu}
     <ul class="list" role="listbox" aria-label={menu.item.title}>
@@ -320,6 +330,7 @@
       <span><kbd>Enter</kbd> {t("footerOpen")}</span>
       <span><kbd>Tab</kbd> {menu ? t("footerBack") : t("footerActions")}</span>
       <span><kbd>Esc</kbd> {t("footerClose")}</span>
+      <span><kbd>Ctrl+,</kbd> {t("settingsShort")}</span>
     </div>
   {/if}
   <div class="sr" aria-live="polite">{query.trim() ? t("results", { n: items.length }) : ""}</div>
@@ -332,15 +343,38 @@
     height: 100vh;
     overflow: hidden;
   }
-  input {
+  .bar {
     flex: none;
+    display: flex;
+    align-items: center;
     height: 54px;
-    width: 100%;
-    padding: 0 20px;
+  }
+  input {
+    flex: 1;
+    min-width: 0;
+    height: 54px;
+    padding: 0 8px 0 20px;
     font-size: 20px;
     background: transparent;
     border: 0;
     outline: 0;
+  }
+  .gear {
+    flex: none;
+    width: 36px;
+    height: 36px;
+    margin-right: 12px;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--text-dim);
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .gear:hover {
+    color: var(--text);
+    background: var(--selected);
   }
   input::placeholder {
     color: var(--text-dim);

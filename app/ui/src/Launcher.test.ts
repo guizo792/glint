@@ -220,6 +220,15 @@ describe("Launcher", () => {
     expect(input.value).toBe("a");
   });
 
+  it("has a visible Settings button and lists the shortcut in the footer", async () => {
+    const input = await setup();
+    await fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(api.openSettings).toHaveBeenCalledTimes(1);
+    await type(input, "a");
+    await results(3);
+    expect(document.querySelector(".footer")?.textContent).toContain("Ctrl+,");
+  });
+
   it("tells screen readers how many results there are", async () => {
     const input = await setup();
     await type(input, "a");

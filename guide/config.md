@@ -11,7 +11,7 @@ Every setting is optional.
 | `theme` | `"system"` | `system`, `light` or `dark` |
 | `language` | `"en"` | `en` or `fr` |
 | `max_results` | `20` | From 1 to 200 |
-| `remember_query_secs` | `0` | Keep the query if reopened within this many seconds |
+| `remember_query_secs` | `3` | If you close the bar with Esc or by clicking away and reopen it within this many seconds, the text comes back selected, so typing replaces it. Opening a result always clears it. `0` clears it every time. |
 | `extra_roots` | `[]` | Folders to index beyond the fixed drives, such as a USB or network drive. Applies after restart. |
 | `extra_excludes` | `[]` | Folder names to skip, added to the built-in list. Applies after restart. |
 | `rebuild_hours` | `6` | Hours between full rebuilds. New files appear sooner through file watching. |
