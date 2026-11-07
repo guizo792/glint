@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["app", "crates/glint-core", "crates/glint-ext", "crates/glint-win", "spikes/bench"]
+exclude = ["extensions"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

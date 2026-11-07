@@ -1,0 +1,8 @@
+{
+  "id": "uuid-python",
+  "name": "UUID generator",
+  "version": "1.0.0",
+  "trigger": "uuid",
+  "command": ["python", "-u", "main.py"],
+  "permissions": ["clipboard"]
+}
