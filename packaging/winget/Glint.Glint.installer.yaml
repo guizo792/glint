@@ -1,9 +1,13 @@
-# Template for a winget submission, not yet submitted. Before submitting, fill in the release
-# URL and hash, and confirm the identifier. Winget also needs the version and locale manifests.
+# Template, not submitted. The hash below is a placeholder. After each release, compute the real
+# one with `certutil -hashfile <installer> SHA256`, and then run `winget validate` on this folder.
 PackageIdentifier: Glint.Glint
 PackageVersion: 0.1.0
 InstallerType: nullsoft
 Scope: user
+InstallModes:
+  - interactive
+  - silent
+UpgradeBehavior: install
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/OWNER/REPO/releases/download/v0.1.0/Glint_0.1.0_x64-setup.exe
