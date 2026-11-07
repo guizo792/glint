@@ -171,9 +171,7 @@
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
-      if (menu) closeMenu();
-      else if (confirming) confirming = null;
-      else close();
+      escape();
     } else if (ctrl && e.key === ",") {
       e.preventDefault();
       api.openSettings();
@@ -188,6 +186,22 @@
     hiddenAt = Date.now();
     api.hideLauncher();
   }
+
+  /** What Esc does: back out one level at a time. The footer's Close button does the same. */
+  function escape() {
+    if (menu) closeMenu();
+    else if (confirming) confirming = null;
+    else close();
+  }
+
+  /** What plain Enter does. The footer's Open button does the same. */
+  function activate() {
+    if (menu) run(menu.item, menu.item.actions[menu.index]);
+    else if (selectedItem) run(selectedItem, "open");
+  }
+
+  /** Footer buttons must not take focus from the search box, or typing would stop working. */
+  const keepFocus = (e: MouseEvent) => e.preventDefault();
 
   function highlight(title: string, text: string) {
     const needle = text.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
@@ -273,6 +287,7 @@
     tabindex="-1"
     aria-label={t("settingsShort")}
     title={`${t("settingsShort")} (Ctrl+,)`}
+    onmousedown={keepFocus}
     onclick={() => api.openSettings()}>⚙</button
   >
   </div>
@@ -327,10 +342,18 @@
   {/if}
   {#if items.length || menu || error}
     <div class="footer">
-      <span><kbd>Enter</kbd> {t("footerOpen")}</span>
-      <span><kbd>Tab</kbd> {menu ? t("footerBack") : t("footerActions")}</span>
-      <span><kbd>Esc</kbd> {t("footerClose")}</span>
-      <span><kbd>Ctrl+,</kbd> {t("settingsShort")}</span>
+      <button type="button" tabindex="-1" onmousedown={keepFocus} onclick={activate}>
+        <kbd>Enter</kbd> {t("footerOpen")}
+      </button>
+      <button type="button" tabindex="-1" onmousedown={keepFocus} onclick={() => (menu ? closeMenu() : openMenu())}>
+        <kbd>Tab</kbd> {menu ? t("footerBack") : t("footerActions")}
+      </button>
+      <button type="button" tabindex="-1" onmousedown={keepFocus} onclick={escape}>
+        <kbd>Esc</kbd> {t("footerClose")}
+      </button>
+      <button type="button" tabindex="-1" onmousedown={keepFocus} onclick={() => api.openSettings()}>
+        <kbd>Ctrl+,</kbd> {t("settingsShort")}
+      </button>
     </div>
   {/if}
   <div class="sr" aria-live="polite">{query.trim() ? t("results", { n: items.length }) : ""}</div>
@@ -464,6 +487,20 @@
     font-size: 12px;
     color: var(--text-dim);
     border-top: 1px solid var(--border);
+  }
+  .footer button {
+    margin: 0 -8px;
+    padding: 4px 8px;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .footer button:hover {
+    color: var(--text);
+    background: var(--selected);
   }
   kbd {
     font: inherit;

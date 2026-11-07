@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { afterEach } from "vitest";
 
 const handlers: Record<string, (e: { payload: unknown }) => void> = {};
@@ -218,6 +218,35 @@ describe("Launcher", () => {
     await fireEvent.keyDown(input, { key: "Escape" });
     await handlers.shown({ payload: 0 });
     expect(input.value).toBe("a");
+  });
+
+  it("makes every footer hint clickable, without taking focus from the search box", async () => {
+    const input = await setup();
+    await type(input, "bet");
+    await results(3);
+    const footer = () => document.querySelector(".footer") as HTMLElement;
+    const press = (name: RegExp) => fireEvent.click(within(footer()).getByRole("button", { name }));
+
+    await press(/Open/);
+    expect(api.runItem).toHaveBeenCalledWith("file:alpha.txt", "open", "bet");
+
+    await type(input, "bet");
+    await results(3);
+    await press(/Actions/);
+    await screen.findByText("Copy path");
+    await press(/Back/);
+    await results(3);
+
+    await press(/Settings/);
+    expect(api.openSettings).toHaveBeenCalled();
+
+    await press(/Close/);
+    expect(api.hideLauncher).toHaveBeenCalled();
+
+    // A mouse press on a hint is cancelled before it can move focus off the input.
+    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    within(footer()).getByRole("button", { name: /Open/ }).dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
   });
 
   it("has a visible Settings button and lists the shortcut in the footer", async () => {
