@@ -38,6 +38,7 @@
         <img src="favicon.svg" alt="" width="28" height="28"> Glint
       </a>
       <nav aria-label="Sections">
+        <a href="#try">Try it</a>
         <a href="#features">Features</a>
         <a href="#keys">Keys</a>
         <a href="#install">Install</a>
@@ -56,15 +57,17 @@
       <h1>Type a few letters.<br><span class="hl">Press Enter.</span></h1>
       <p class="lead">Glint is a fast keyboard launcher for Windows. It finds apps, files, folders, settings pages and open windows anywhere on your PC, and learns what you pick.</p>
       <div class="cta">
-        <a class="btn primary" href="https://github.com/guizo792/glint/releases/latest">Download for Windows</a>
+        <a class="btn primary" href="#try">Try it live</a>
+        <a class="btn accent" href="https://github.com/guizo792/glint/releases/latest/download/Glint-setup-x64.exe">Download for Windows</a>
         <a class="btn" href="https://github.com/guizo792/glint">View on GitHub</a>
       </div>
-      <p class="fine">Windows 10 and 11, 64-bit · per-user install, no administrator rights · <a href="#install">about the Windows warning</a></p>
+      <p class="fine">Windows 10 and 11, 64-bit · per-user install, no administrator rights · <a href="#install">not signed yet: why Windows may warn</a> · <a href="https://github.com/guizo792/glint/releases/latest">checksum and other versions</a></p>
     </section>
 
     <section class="stage-wrap wrap" id="try" aria-labelledby="try-title">
       <h2 id="try-title" class="sr">Try Glint here</h2>
       <div class="stage">
+        <p class="stage-label" id="stage-label"><span aria-hidden="true">▼</span> <span id="label-text">Live demo: this is playing a few examples. Click the box to type your own.</span></p>
         <div class="win" id="win" data-state="idle">
           <div class="bar-in">
             <input id="q" type="text" role="combobox" aria-expanded="false" aria-controls="list"
@@ -90,7 +93,7 @@
             <button type="button" data-act="settings"><kbd>Ctrl+,</kbd> Settings</button>
           </div>
         </div>
-        <p class="status" id="status" role="status" aria-live="polite">This is a live demo with made-up files. Click the box and type, or pick an example.</p>
+        <p class="status" id="status" role="status" aria-live="polite">Playing a few examples on made-up files. Click the box and type anything to take over.</p>
         <div class="chips" id="chips" aria-label="Examples to try"></div>
       </div>
       <noscript>
