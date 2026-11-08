@@ -319,6 +319,7 @@ let timers = [];
 function stopAutoplay() {
   if (interacted) return;
   interacted = true;
+  $("label-text").textContent = "Your turn: type anything, or pick an example below.";
   timers.forEach(clearTimeout);
   timers = [];
   win.dataset.state = "live";
@@ -329,6 +330,8 @@ function startAutoplay() {
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
     input.value = "helios";
     recompute();
+    $("label-text").textContent = "Live demo: click the box and type, or pick an example below.";
+    say("An example on made-up files. Click the box and type anything.");
     return;
   }
   let t = 400;

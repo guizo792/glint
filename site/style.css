@@ -94,6 +94,7 @@ h1 { margin: 0; font-size: clamp(2.1rem, 5.5vw, 3.6rem); line-height: 1.08; lett
   border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); font-size: 15px;
 }
 .bar-in { display: flex; align-items: center; height: 54px; }
+.win[data-state="idle"] input[type="text"] { cursor: text; }
 .win input[type="text"] {
   flex: 1; min-width: 0; height: 54px; padding: 0 8px 0 20px; font: inherit; font-size: 20px; color: inherit;
   background: transparent; border: 0; outline: 0; border-radius: 12px;

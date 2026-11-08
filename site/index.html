@@ -67,7 +67,7 @@
     <section class="stage-wrap wrap" id="try" aria-labelledby="try-title">
       <h2 id="try-title" class="sr">Try Glint here</h2>
       <div class="stage">
-        <p class="stage-label"><span aria-hidden="true">▼</span> Live demo: click the box and type, or pick an example below</p>
+        <p class="stage-label" id="stage-label"><span aria-hidden="true">▼</span> <span id="label-text">Live demo: this is playing a few examples. Click the box to type your own.</span></p>
         <div class="win" id="win" data-state="idle">
           <div class="bar-in">
             <input id="q" type="text" role="combobox" aria-expanded="false" aria-controls="list"
@@ -93,7 +93,7 @@
             <button type="button" data-act="settings"><kbd>Ctrl+,</kbd> Settings</button>
           </div>
         </div>
-        <p class="status" id="status" role="status" aria-live="polite">This is a live demo with made-up files. Click the box and type, or pick an example.</p>
+        <p class="status" id="status" role="status" aria-live="polite">Playing a few examples on made-up files. Click the box and type anything to take over.</p>
         <div class="chips" id="chips" aria-label="Examples to try"></div>
       </div>
       <noscript>
