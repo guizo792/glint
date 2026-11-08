@@ -121,6 +121,19 @@ function render() {
   if (any) input.setAttribute("aria-activedescendant", `opt-${active}`);
   else input.removeAttribute("aria-activedescendant");
   list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  keepDemoInView();
+}
+
+/** Once the visitor is typing, make sure the whole demo is on screen, not cut off below the fold. */
+function keepDemoInView() {
+  if (!interacted) return;
+  const r = win.getBoundingClientRect();
+  const fits = r.height <= innerHeight - 80;
+  // A demo taller than the screen is aligned to the top once; one that fits is centred when cut off.
+  const off = fits ? r.bottom > innerHeight - 8 || r.top < 60 : r.top < 0 || r.top > 120;
+  if (!off) return;
+  const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  win.scrollIntoView({ block: fits ? "center" : "start", behavior: calm ? "auto" : "smooth" });
 }
 
 function recompute(keepSel = false) {
