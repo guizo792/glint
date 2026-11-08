@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Glint: a fast keyboard launcher for Windows</title>
+  <meta name="description" content="Press a hotkey, type a few letters, press Enter. Glint finds apps, files, folders, settings and windows anywhere on your PC, learns what you pick, and works fully offline. Free and open source.">
+  <meta name="theme-color" content="#1e1f26">
+  <link rel="canonical" href="https://guizo792.github.io/glint/">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Glint: a fast keyboard launcher for Windows">
+  <meta property="og:description" content="Type a few letters, press Enter. Apps, files, folders, settings and windows, instantly. Free, open source and fully offline.">
+  <meta property="og:url" content="https://guizo792.github.io/glint/">
+  <meta property="og:image" content="https://guizo792.github.io/glint/glint-social.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Glint",
+    "applicationCategory": "UtilitiesApplication",
+    "operatingSystem": "Windows 10, Windows 11",
+    "description": "A fast, keyboard-first launcher for Windows. Free and open source.",
+    "license": "https://opensource.org/license/mit",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "url": "https://guizo792.github.io/glint/"
+  }
+  </script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#try">Skip to the demo</a>
+
+  <header class="top">
+    <div class="wrap bar">
+      <a class="brand" href="#" aria-label="Glint, back to the top">
+        <img src="favicon.svg" alt="" width="28" height="28"> Glint
+      </a>
+      <nav aria-label="Sections">
+        <a href="#features">Features</a>
+        <a href="#keys">Keys</a>
+        <a href="#install">Install</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://github.com/guizo792/glint">GitHub</a>
+      </nav>
+      <button class="theme" id="theme-toggle" type="button" aria-label="Switch between light and dark">
+        <span aria-hidden="true">◐</span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero wrap">
+      <p class="eyebrow">Free · open source · fully offline</p>
+      <h1>Type a few letters.<br><span class="hl">Press Enter.</span></h1>
+      <p class="lead">Glint is a fast keyboard launcher for Windows. It finds apps, files, folders, settings pages and open windows anywhere on your PC, and learns what you pick.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/guizo792/glint/releases/latest">Download for Windows</a>
+        <a class="btn" href="https://github.com/guizo792/glint">View on GitHub</a>
+      </div>
+      <p class="fine">Windows 10 and 11, 64-bit · per-user install, no administrator rights · <a href="#install">about the Windows warning</a></p>
+    </section>
+
+    <section class="stage-wrap wrap" id="try" aria-labelledby="try-title">
+      <h2 id="try-title" class="sr">Try Glint here</h2>
+      <div class="stage">
+        <div class="win" id="win" data-state="idle">
+          <div class="bar-in">
+            <input id="q" type="text" role="combobox" aria-expanded="false" aria-controls="list"
+                   aria-autocomplete="list" aria-label="Search apps, files and commands"
+                   placeholder="Search apps, files and commands" autocomplete="off" autocapitalize="off"
+                   autocorrect="off" spellcheck="false" enterkeyhint="go">
+            <button class="gear" id="gear" type="button" aria-label="Settings" aria-haspopup="true"
+                    aria-expanded="false" title="Settings (Ctrl+,)">⚙</button>
+          </div>
+          <div class="pop" id="pop" hidden>
+            <p class="pop-title">Theme</p>
+            <label><input type="radio" name="theme" value="system" checked> Match Windows</label>
+            <label><input type="radio" name="theme" value="light"> Light</label>
+            <label><input type="radio" name="theme" value="dark"> Dark</label>
+            <p class="pop-note">The app also lets you change the hotkey, language and more.</p>
+          </div>
+          <ul class="list" id="list" role="listbox" aria-label="Results" hidden></ul>
+          <div class="empty" id="empty" hidden>No results</div>
+          <div class="foot" id="foot" hidden>
+            <button type="button" data-act="enter"><kbd>Enter</kbd> Open</button>
+            <button type="button" data-act="tab"><kbd>Tab</kbd> <span id="tab-label">Actions</span></button>
+            <button type="button" data-act="esc"><kbd>Esc</kbd> Clear</button>
+            <button type="button" data-act="settings"><kbd>Ctrl+,</kbd> Settings</button>
+          </div>
+        </div>
+        <p class="status" id="status" role="status" aria-live="polite">This is a live demo with made-up files. Click the box and type, or pick an example.</p>
+        <div class="chips" id="chips" aria-label="Examples to try"></div>
+      </div>
+      <noscript>
+        <p class="fine center">The live demo needs JavaScript. You can see Glint in action in the <a href="https://github.com/guizo792/glint#readme">README</a>.</p>
+      </noscript>
+    </section>
+
+    <section class="wrap section" id="features" aria-labelledby="features-title">
+      <h2 id="features-title">Everything in one box</h2>
+      <p class="sub">One shortcut, one text box, no menus to remember.</p>
+      <div class="grid">
+        <article class="card"><h3><span aria-hidden="true">🔎</span> Finds everything</h3>
+          <p>Apps, files, folders, settings pages and open windows, across every fixed drive. New files show up within a couple of seconds.</p></article>
+        <article class="card"><h3><span aria-hidden="true">⚡</span> Fast on big disks</h3>
+          <p>Searches an index held in memory, so results appear as you type, even with hundreds of thousands of files.</p></article>
+        <article class="card"><h3><span aria-hidden="true">🧠</span> Learns what you pick</h3>
+          <p>What you open for a query comes first next time, for every prefix you type. Pin favourites, hide the noise.</p></article>
+        <article class="card"><h3><span aria-hidden="true">🎯</span> Filters that read like words</h3>
+          <p><code>report ext:pdf in:Finance</code>, plus <code>file:</code>, <code>dir:</code> and <code>app:</code>. Every word must match the name or a folder on its path.</p></article>
+        <article class="card"><h3><span aria-hidden="true">🧮</span> Calculator and units</h3>
+          <p><code>18% of 240</code>, <code>2024/3</code>, <code>10 km to mi</code>, <code>100 f to c</code>. Enter copies the answer.</p></article>
+        <article class="card"><h3><span aria-hidden="true">⚙️</span> System commands</h3>
+          <p>Type <code>&gt;</code> for lock, sleep, restart and every Windows settings page, without digging through menus.</p></article>
+        <article class="card"><h3><span aria-hidden="true">🌐</span> Web when you want it</h3>
+          <p><code>? rust</code> opens a search; <code>g</code>, <code>ddg</code>, <code>yt</code> and <code>gh</code> are built in. Add your own bangs and links.</p></article>
+        <article class="card"><h3><span aria-hidden="true">🧩</span> Extensions</h3>
+          <p>Small programs in any language that answer to a trigger word. They stay off until you turn them on, and declare what they may do.</p></article>
+        <article class="card"><h3><span aria-hidden="true">🔒</span> Private by design</h3>
+          <p>No network connections of its own and no telemetry. Clipboard history is off by default and skips what password managers mark private.</p></article>
+      </div>
+    </section>
+
+    <section class="wrap section" id="keys" aria-labelledby="keys-title">
+      <h2 id="keys-title">Made for the keyboard</h2>
+      <p class="sub">Everything below also works in the demo above.</p>
+      <div class="two">
+        <table>
+          <caption class="sr">Keyboard shortcuts</caption>
+          <thead><tr><th scope="col">Key</th><th scope="col">Does</th></tr></thead>
+          <tbody>
+            <tr><td><kbd>Alt</kbd>+<kbd>Space</kbd></td><td>Open Glint from anywhere (you can change it)</td></tr>
+            <tr><td><kbd>↑</kbd> <kbd>↓</kbd>, <kbd>Ctrl</kbd>+<kbd>J</kbd>/<kbd>K</kbd></td><td>Move through results</td></tr>
+            <tr><td><kbd>Enter</kbd></td><td>Open</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Enter</kbd></td><td>Open containing folder</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd></td><td>Run as administrator</td></tr>
+            <tr><td><kbd>Tab</kbd></td><td>Actions: copy path, open terminal here, pin, hide</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>1</kbd> to <kbd>9</kbd></td><td>Open that result</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Back, then close</td></tr>
+          </tbody>
+        </table>
+        <table>
+          <caption class="sr">What you can type</caption>
+          <thead><tr><th scope="col">Type</th><th scope="col">Result</th></tr></thead>
+          <tbody>
+            <tr><td><code>report</code></td><td>Apps, files, folders, settings and windows</td></tr>
+            <tr><td><code>projects report</code></td><td>Every word must match the name or a folder on its path</td></tr>
+            <tr><td><code>report ext:pdf</code></td><td>Only PDFs. Also <code>in:Documents</code>, <code>file:</code>, <code>dir:</code>, <code>app:</code></td></tr>
+            <tr><td><code>12*12</code> · <code>= 2024/3</code></td><td>Calculator</td></tr>
+            <tr><td><code>10 km to mi</code></td><td>Unit conversion</td></tr>
+            <tr><td><code>&gt; lock</code></td><td>System commands and settings pages</td></tr>
+            <tr><td><code>w notes</code></td><td>Switch to an open window</td></tr>
+            <tr><td><code>c token</code></td><td>Clipboard history, if you turn it on</td></tr>
+            <tr><td><code>? rust</code> · <code>g rust</code></td><td>Web search</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="wrap section" id="install" aria-labelledby="install-title">
+      <h2 id="install-title">Get Glint</h2>
+      <p class="sub">Windows 10 and 11, 64-bit. Free, with no account and no sign-up.</p>
+      <ol class="steps">
+        <li><strong>Download the installer</strong> from the <a href="https://github.com/guizo792/glint/releases/latest">latest release</a>.</li>
+        <li><strong>Run it.</strong> It installs for your user only and needs no administrator rights.</li>
+        <li><strong>Press <kbd>Alt</kbd>+<kbd>Space</kbd></strong> and start typing.</li>
+      </ol>
+      <div class="note">
+        <h3>About the Windows warning</h3>
+        <p>Glint is a free community project, and code-signing certificates cost money, so the installer is not signed yet. Windows SmartScreen may show “Windows protected your PC”. That means the file is new and unrecognised, not that it was found to be harmful. Choose <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
+        <p>To check that your download is the file that was published, compare its checksum with the one in the release notes:</p>
+        <pre><code>certutil -hashfile Glint_0.1.0_x64-setup.exe SHA256</code></pre>
+        <p>Prefer to build it yourself? Everything you run is then built from code you can read. See <a href="https://github.com/guizo792/glint#building">Building</a> in the README.</p>
+      </div>
+    </section>
+
+    <section class="wrap section" id="faq" aria-labelledby="faq-title">
+      <h2 id="faq-title">Questions</h2>
+      <div class="faq">
+        <details><summary>Does Glint send anything over the network?</summary>
+          <p>No. It makes no network connections of its own. Web results only open your browser when you choose them. Usage history is a local file you can clear in Settings. Extensions are the exception to this: they are programs running with your user rights, so only turn on ones you trust.</p></details>
+        <details><summary>Does it search inside files?</summary>
+          <p>Glint searches names, not contents. The last row of most searches hands the query to Windows’ own search, which can look inside files in the places Windows has indexed.</p></details>
+        <details><summary>How much memory does it use?</summary>
+          <p>About 100 MB in everyday use on a Windows 11 PC, measured after a search. It draws its window in software inside a single process to avoid the extra GPU process a web view normally starts.</p></details>
+        <details><summary>Is it a beta?</summary>
+          <p>It is an early release, version 0.1. It is tested and usable every day, but the settings file and extension interface may still change before 1.0. Bug reports and ideas are very welcome.</p></details>
+        <details><summary>What license is it under?</summary>
+          <p>MIT or Apache-2.0, at your option.</p></details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap foot-page">
+    <p>
+      <a href="https://github.com/guizo792/glint">Source code</a> ·
+      <a href="https://github.com/guizo792/glint/releases">Releases</a> ·
+      <a href="https://github.com/guizo792/glint/issues/new/choose">Report a bug</a> ·
+      <a href="https://github.com/guizo792/glint/discussions">Discussions</a>
+    </p>
+    <p class="fine">Glint is an independent open-source project, not affiliated with Apple or Microsoft. The demo above uses made-up files and runs entirely in your browser.</p>
+  </footer>
+
+  <script type="module" src="demo.js"></script>
+</body>
+</html>
