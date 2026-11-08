@@ -2,6 +2,8 @@
 
 A fast keyboard launcher for Windows 11. Press a hotkey, type a few letters, press Enter. It finds apps, files, folders, settings pages and open windows anywhere on your PC, learns what you pick, and sends nothing over the network.
 
+![Glint finding files, doing math and learning what you pick](assets/glint-demo.gif)
+
 ## Installing
 
 Glint is free and open source. Download the installer from the releases page, or build it yourself (below).
