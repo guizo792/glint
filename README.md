@@ -83,6 +83,10 @@ The app is `target/release/glint.exe`. To build the installer, run `npx --prefix
 - [guide/extensions.md](guide/extensions.md): writing extensions
 - [CONTRIBUTING.md](CONTRIBUTING.md): how to contribute
 
+## Feedback
+
+Found a bug, a search that missed, or have an idea? [Open an issue](https://github.com/guizo792/glint/issues/new/choose). For questions or general feedback, use [Discussions](https://github.com/guizo792/glint/discussions). If Glint is useful to you, a star helps other people find it.
+
 ## License
 
 MIT or Apache-2.0, at your option.
