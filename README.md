@@ -4,6 +4,8 @@ A fast keyboard launcher for Windows 11. Press a hotkey, type a few letters, pre
 
 ![Glint finding files, doing math and learning what you pick](assets/glint-demo.gif)
 
+**[Try it in your browser](https://guizo792.github.io/glint/)**: a live demo on made-up files, plus install steps and a short FAQ.
+
 ## Installing
 
 Glint is free and open source. Download the installer from the releases page, or build it yourself (below).
