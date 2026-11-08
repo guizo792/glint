@@ -601,12 +601,17 @@ for line in sys.stdin:
         let (dir, host) = host("slow-start", &[]);
         // Takes longer to start than the normal query limit, then behaves normally.
         let script = format!(
-            "import time\ntime.sleep(1.5)\n{}",
+            "import time\ntime.sleep(1.0)\n{}",
             fs::read_to_string(dir.join("demo").join("main.py")).unwrap()
         );
         fs::write(dir.join("demo").join("main.py"), script).unwrap();
         host.reload();
-        assert_eq!(titles(&host, "echo first"), ["Echo first"]);
+        assert_eq!(
+            titles(&host, "echo first"),
+            ["Echo first"],
+            "{:?}",
+            host.list()[0].error
+        );
         assert_eq!(titles(&host, "echo second"), ["Echo second"]);
         assert!(host.list()[0].error.is_none());
         finish(dir, host);
