@@ -30,6 +30,7 @@ public static class Win {
   public static uint IdleMs() { var i = new LASTINPUT(); i.size = 8; GetLastInputInfo(ref i); return (uint)Environment.TickCount - i.time; }
   public static string Title() { var s = new System.Text.StringBuilder(256); GetWindowText(GetForegroundWindow(), s, 256); return s.ToString(); }
   // Ctrl+Alt+Shift+F11, the hotkey this script gives the test instance.
+  public static void KeepAlive() { keybd_event(0x7E, 0, 0, UIntPtr.Zero); keybd_event(0x7E, 0, 2, UIntPtr.Zero); }
   public static void Hotkey() {
     byte[] mods = {0x11, 0x12, 0x10};
     foreach (var m in mods) keybd_event(m, 0, 0, UIntPtr.Zero);
@@ -49,6 +50,12 @@ $env:GLINT_TRACE = "1"
 if ($ExtraArgs) { $env:GLINT_WEBVIEW_ARGS = $ExtraArgs }
 $proc = Start-Process $Exe -PassThru
 Remove-Item Env:GLINT_DATA_DIR, Env:GLINT_TRACE, Env:GLINT_WEBVIEW_ARGS -ErrorAction SilentlyContinue
+
+# Sleep in short steps, tapping F15 so the session does not lock from idleness mid-run.
+function Wait-Alive($seconds) {
+    for ($t = 0; $t -lt $seconds; $t += 5) { [Win]::KeepAlive(); Start-Sleep -Seconds ([math]::Min(5, $seconds - $t)) }
+}
+function Test-Locked { [bool](Get-Process LogonUI -ErrorAction SilentlyContinue) }
 
 function Snapshot($stage) {
     $all = Get-CimInstance Win32_Process
@@ -89,9 +96,10 @@ try {
     for ($i = 0; $i -lt 150; $i++) {
         if ((Test-Path $log0) -and (Select-String -Path $log0 -Pattern "Up to date" -Quiet)) { break }
         if ($proc.HasExited) { throw "Glint exited while indexing" }
+        if ($i % 5 -eq 0) { [Win]::KeepAlive() }
         Start-Sleep -Seconds 1
     }
-    Start-Sleep -Seconds 12
+    Wait-Alive 12
     $result.fresh = Snapshot "fresh idle (index built)"
 
     if ($Workload) {
@@ -102,9 +110,12 @@ try {
             $notes += "workload SKIPPED: desktop locked"
         } else {
             for ($i = 1; $i -le 20; $i++) {
+                if (Test-Locked) { $notes += "stopped at round $i`: the desktop locked"; break }
                 [Win]::Hotkey(); Start-Sleep -Milliseconds 450
                 if ([Win]::Title() -ne "Glint") { $notes += "round $i`: Glint did not take focus"; continue }
-                foreach ($c in "report".ToCharArray()) { [System.Windows.Forms.SendKeys]::SendWait("$c"); Start-Sleep -Milliseconds 90 }
+                try {
+                    foreach ($c in "report".ToCharArray()) { [System.Windows.Forms.SendKeys]::SendWait("$c"); Start-Sleep -Milliseconds 90 }
+                } catch { $notes += "stopped at round $i`: keystrokes were refused ($($_.Exception.Message))"; break }
                 Start-Sleep -Milliseconds 500
                 if ($i -eq 10) {
                     $r = New-Object Win+RECT
@@ -118,9 +129,10 @@ try {
                         $result.screenshot = "$Out\$Label.png"
                     }
                 }
-                [System.Windows.Forms.SendKeys]::SendWait("{ESC}"); Start-Sleep -Milliseconds 350
+                try { [System.Windows.Forms.SendKeys]::SendWait("{ESC}") } catch { $notes += "stopped at round $i`: keystrokes were refused"; break }
+                Start-Sleep -Milliseconds 350
             }
-            Start-Sleep -Seconds 15
+            Wait-Alive 15
             $result.after_use = Snapshot "after use, hidden"
             $log = "$data\logs\glint.log"
             foreach ($metric in "show", "search") {
@@ -141,6 +153,11 @@ try {
     if ($problems.Count) { $notes += "log problems: " + ($problems -join " | ") }
     $result.alive = -not $proc.HasExited
 } finally {
+    # Keep the evidence if the app went away on its own: a panic restarts it, which looks like
+    # an exit, and the log would otherwise be deleted with the temporary data folder.
+    $result.exited_early = $proc.HasExited
+    if ($proc.HasExited) { $result.exit_code = $proc.ExitCode }
+    if (Test-Path "$data\logs\glint.log") { Copy-Item "$data\logs\glint.log" "$Out\$Label.log" -Force }
     if (-not $proc.HasExited) { Stop-Process $proc -Force }
     Start-Sleep -Milliseconds 800
     Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue

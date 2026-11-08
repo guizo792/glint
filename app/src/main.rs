@@ -31,9 +31,14 @@ use tauri::{
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const WIDTH: f64 = 680.0;
-/// WebView2 browser flags Tauri uses when none are given. Setting any flags replaces these, so
-/// they are repeated here to keep that behaviour.
-const DEFAULT_WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+/// WebView2 browser flags. The first group is what Tauri uses when none are given; setting any
+/// flags replaces it, so it is repeated here. The second group draws in software inside the
+/// browser process, which removes the separate GPU process: the launcher is a text box and a
+/// list, so nothing is visibly different, and measured memory after use fell from about 160 MB
+/// to about 97 MB with the same show and search latency.
+const DEFAULT_WEBVIEW_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+     --disable-gpu --in-process-gpu";
 const LOG_LIMIT: u64 = 1024 * 1024;
 const APP_REFRESH: Duration = Duration::from_secs(300);
 const INDEX_CHECK: Duration = Duration::from_secs(5);

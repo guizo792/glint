@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A manual run, or a pull request that changes this file, builds the installer and attaches it
+  # to the run so the whole pipeline can be tested. Only a tag creates a release.
+  workflow_dispatch:
+  pull_request:
+    paths: [".github/workflows/release.yml"]
 
 jobs:
   installer:
@@ -15,16 +20,53 @@ jobs:
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: npm ci
         working-directory: app/ui
       - run: npm run build
         working-directory: app/ui
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = (Get-Content app/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          if ($version -ne $tag) { throw "Tag v$tag does not match the app version $version in app/tauri.conf.json" }
       - name: Build installer
         run: npx --prefix ui tauri build
         working-directory: app
       # Code signing goes here once a certificate exists. Unsigned installers trigger
       # a SmartScreen warning.
-      - name: Draft a release for review
+      - name: Write checksums
+        shell: pwsh
+        run: |
+          $dir = "target/release/bundle/nsis"
+          $installer = Get-ChildItem $dir -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "No installer was built in $dir" }
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "$dir/SHA256SUMS.txt" -Value "$hash  $($installer.Name)" -Encoding ascii
+          Add-Content -Path $env:GITHUB_ENV -Value "INSTALLER=$dir/$($installer.Name)"
+          Add-Content -Path $env:GITHUB_ENV -Value "SHA256=$hash"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: glint-installer
+          path: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/SHA256SUMS.txt
+      - name: Draft the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" --draft --generate-notes target/release/bundle/nsis/*.exe
+          TAG: ${{ github.ref_name }}
+        run: |
+          @(
+            "Windows 10 and 11, 64-bit. Per-user install; no administrator rights needed."
+            ""
+            "SHA-256 of the installer: $env:SHA256"
+            ""
+            "This installer is not code-signed, so Windows SmartScreen may warn about it. Choose More info, then Run anyway, or build from source. See the README."
+          ) | Set-Content -Path release-notes.md -Encoding utf8
+          $flags = @()
+          if ($env:TAG -like "v0.*") { $flags += "--prerelease" }
+          gh release create $env:TAG --draft --title "Glint $($env:TAG.TrimStart('v'))" --notes-file release-notes.md --generate-notes @flags $env:INSTALLER "target/release/bundle/nsis/SHA256SUMS.txt"
